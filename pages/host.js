@@ -36,7 +36,7 @@ export default function HostGame() {
         auth: {
           params: {
             user_id: hostId,
-            user_info: { name: 'Host', isHost: true },
+            user_info: JSON.stringify({ name: 'Host', isHost: true }),
           },
         },
       });
