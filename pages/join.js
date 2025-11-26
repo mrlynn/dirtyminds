@@ -84,11 +84,12 @@ export default function JoinGame() {
 
       // Listen for game events
       channel.bind('client-game-started', (data) => {
-      setGameStarted(true);
-      setTotalRiddles(data.riddleCount);
-      setRiddleNumber(1);
-      setCanBuzzIn(true);
-    });
+        setGameStarted(true);
+        setTotalRiddles(data.riddleCount);
+        setRiddleNumber(1);
+        setCurrentRiddle(data.firstRiddle);
+        setCanBuzzIn(true);
+      });
 
     channel.bind('client-next-riddle', (data) => {
       setCurrentRiddle(data.riddle);
@@ -231,7 +232,7 @@ export default function JoinGame() {
 
               <Card>
                 <CardContent>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                     <Typography variant="body1" sx={{ fontWeight: 600 }}>
                       Riddle {riddleNumber} of {totalRiddles}
                     </Typography>
@@ -241,6 +242,26 @@ export default function JoinGame() {
                       size="small"
                     />
                   </Stack>
+
+                  {/* Display the current riddle */}
+                  {currentRiddle && (
+                    <Box
+                      sx={{
+                        p: 3,
+                        mb: 3,
+                        bgcolor: 'rgba(255, 255, 255, 0.05)',
+                        borderRadius: 2,
+                        minHeight: 100,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Typography variant="h6" sx={{ textAlign: 'center', lineHeight: 1.6 }}>
+                        {currentRiddle}
+                      </Typography>
+                    </Box>
+                  )}
 
                   {buzzResult === 'winner' && (
                     <Box

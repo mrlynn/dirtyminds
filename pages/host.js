@@ -90,16 +90,18 @@ export default function HostGame() {
   };
 
   const handleStartGame = () => {
-    setRiddles(shuffleArray(riddlesData));
+    const shuffledRiddles = shuffleArray(riddlesData);
+    setRiddles(shuffledRiddles);
     setGameStarted(true);
     setCurrentRiddleIndex(0);
     setShowAnswer(false);
 
-    // Notify all players game started
+    // Notify all players game started with first riddle
     if (pusher) {
       const channel = pusher.channel(`presence-game-${gameCode}`);
       channel.trigger('client-game-started', {
         riddleCount: riddlesData.length,
+        firstRiddle: shuffledRiddles[0].clue,
       });
     }
   };
