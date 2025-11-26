@@ -47,7 +47,18 @@ export default function JoinGame() {
     if (!gameCode || !playerName) return;
 
     const pusherClient = getPusherClient();
+    if (!pusherClient) {
+      alert('Pusher not configured. Check environment variables.');
+      return;
+    }
+
     setPusher(pusherClient);
+
+    // Configure user data for presence channel
+    pusherClient.config.auth.params = {
+      user_id: playerId,
+      user_info: { name: playerName },
+    };
 
     const channel = pusherClient.subscribe(`presence-game-${gameCode}`);
 
@@ -56,7 +67,8 @@ export default function JoinGame() {
       setJoined(true);
     });
 
-    channel.bind('pusher:subscription_error', () => {
+    channel.bind('pusher:subscription_error', (error) => {
+      console.error('Pusher subscription error:', error);
       alert('Could not join game. Check the game code.');
     });
 

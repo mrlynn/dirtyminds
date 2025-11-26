@@ -31,7 +31,17 @@ export default function HostGame() {
 
       // Initialize Pusher
       const pusherClient = getPusherClient();
+      if (!pusherClient) {
+        console.error('Pusher not configured');
+        return;
+      }
       setPusher(pusherClient);
+
+      // Configure host user data for presence channel
+      pusherClient.config.auth.params = {
+        user_id: hostId,
+        user_info: { name: 'Host', isHost: true },
+      };
 
       const channel = pusherClient.subscribe(`presence-game-${code}`);
 
