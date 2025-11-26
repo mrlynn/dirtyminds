@@ -24,6 +24,7 @@ export default function HostGame() {
   const [showAnswer, setShowAnswer] = useState(false);
   const [buzzedPlayer, setBuzzedPlayer] = useState(null);
   const [pusher, setPusher] = useState(null);
+  const [currentReaderIndex, setCurrentReaderIndex] = useState(0);
 
   useEffect(() => {
     // Create game
@@ -96,14 +97,17 @@ export default function HostGame() {
     setRiddles(shuffledRiddles);
     setGameStarted(true);
     setCurrentRiddleIndex(0);
+    setCurrentReaderIndex(0);
     setShowAnswer(false);
 
     // Notify all players game started with first riddle
-    if (pusher) {
+    if (pusher && players.length > 0) {
       const channel = pusher.channel(`presence-game-${gameCode}`);
       channel.trigger('client-game-started', {
         riddleCount: riddlesData.length,
         firstRiddle: shuffledRiddles[0].clue,
+        readerId: players[0].id,
+        readerName: players[0].name,
       });
     }
   };
@@ -125,11 +129,17 @@ export default function HostGame() {
       setShowAnswer(false);
       setBuzzedPlayer(null);
 
-      if (pusher) {
+      // Rotate to next reader
+      const nextReaderIndex = (currentReaderIndex + 1) % players.length;
+      setCurrentReaderIndex(nextReaderIndex);
+
+      if (pusher && players.length > 0) {
         const channel = pusher.channel(`presence-game-${gameCode}`);
         channel.trigger('client-next-riddle', {
           riddleIndex: nextIndex,
           riddle: riddles[nextIndex].clue,
+          readerId: players[nextReaderIndex].id,
+          readerName: players[nextReaderIndex].name,
         });
       }
     } else {

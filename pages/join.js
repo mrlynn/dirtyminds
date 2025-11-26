@@ -36,6 +36,8 @@ export default function JoinGame() {
   const [answer, setAnswer] = useState('');
   const [myScore, setMyScore] = useState(0);
   const [pusher, setPusher] = useState(null);
+  const [isMyTurnToRead, setIsMyTurnToRead] = useState(false);
+  const [currentReaderName, setCurrentReaderName] = useState('');
 
   useEffect(() => {
     if (code) {
@@ -89,16 +91,20 @@ export default function JoinGame() {
         setRiddleNumber(1);
         setCurrentRiddle(data.firstRiddle);
         setCanBuzzIn(true);
+        setIsMyTurnToRead(data.readerId === playerId);
+        setCurrentReaderName(data.readerName);
       });
 
-    channel.bind('client-next-riddle', (data) => {
-      setCurrentRiddle(data.riddle);
-      setRiddleNumber(data.riddleIndex + 1);
-      setCanBuzzIn(true);
-      setBuzzedIn(false);
-      setBuzzResult(null);
-      setAnswer('');
-    });
+      channel.bind('client-next-riddle', (data) => {
+        setCurrentRiddle(data.riddle);
+        setRiddleNumber(data.riddleIndex + 1);
+        setCanBuzzIn(true);
+        setBuzzedIn(false);
+        setBuzzResult(null);
+        setAnswer('');
+        setIsMyTurnToRead(data.readerId === playerId);
+        setCurrentReaderName(data.readerName);
+      });
 
     channel.bind('client-buzz-result', (data) => {
       if (data.winner === playerId) {
@@ -270,6 +276,42 @@ export default function JoinGame() {
                       size="small"
                     />
                   </Stack>
+
+                  {/* Show whose turn it is to read */}
+                  {isMyTurnToRead ? (
+                    <Box
+                      sx={{
+                        p: 2,
+                        mb: 2,
+                        bgcolor: 'rgba(0, 237, 100, 0.2)',
+                        border: '2px solid',
+                        borderColor: 'primary.main',
+                        borderRadius: 2,
+                        textAlign: 'center',
+                      }}
+                    >
+                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                        📖 Your Turn to Read!
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                        Read this riddle out loud to the group
+                      </Typography>
+                    </Box>
+                  ) : currentReaderName && (
+                    <Box
+                      sx={{
+                        p: 2,
+                        mb: 2,
+                        bgcolor: 'rgba(255, 255, 255, 0.05)',
+                        borderRadius: 2,
+                        textAlign: 'center',
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                        {currentReaderName}'s turn to read
+                      </Typography>
+                    </Box>
+                  )}
 
                   {/* Display the current riddle */}
                   {currentRiddle && (
