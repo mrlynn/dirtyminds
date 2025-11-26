@@ -10,6 +10,8 @@ import Scoreboard from '../components/Scoreboard';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ShareIcon from '@mui/icons-material/Share';
 
 export default function HostGame() {
   const router = useRouter();
@@ -191,9 +193,42 @@ export default function HostGame() {
                 <Typography variant="h6" sx={{ textAlign: 'center', fontWeight: 700, mb: 1 }}>
                   Game Code: {gameCode}
                 </Typography>
-                <Typography variant="body2" sx={{ textAlign: 'center', color: 'text.secondary', mb: 3 }}>
-                  Players scan QR code to join
+                <Typography variant="body2" sx={{ textAlign: 'center', color: 'text.secondary', mb: 2 }}>
+                  Share this link with players:
                 </Typography>
+
+                <Stack spacing={1} sx={{ mb: 3 }}>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    color="primary"
+                    startIcon={<ContentCopyIcon />}
+                    onClick={() => {
+                      navigator.clipboard.writeText(joinUrl);
+                      alert('Link copied! Share it with your players.');
+                    }}
+                  >
+                    Copy Join Link
+                  </Button>
+
+                  {typeof navigator !== 'undefined' && navigator.share && (
+                    <Button
+                      fullWidth
+                      variant="outlined"
+                      color="primary"
+                      startIcon={<ShareIcon />}
+                      onClick={() => {
+                        navigator.share({
+                          title: 'Join Dirty Minds Game',
+                          text: `Join my game with code: ${gameCode}`,
+                          url: joinUrl,
+                        });
+                      }}
+                    >
+                      Share via Text/Email
+                    </Button>
+                  )}
+                </Stack>
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
