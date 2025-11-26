@@ -81,8 +81,8 @@ const riddles = [
   },
   {
     id: 17,
-    clue: "I take a pounding every morning, and if you do it right, I\'ll leave you feeling warm inside.",
-    answer: "A Coffee Maker"
+    clue: "I love it when you grind me, and if you do it right, I\'ll leave you feeling warm inside.",
+    answer: "Coffee"
   },
   {
     id: 18,

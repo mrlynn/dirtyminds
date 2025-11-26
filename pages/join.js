@@ -130,8 +130,36 @@ export default function JoinGame() {
     }
   };
 
+  const playBuzzerSound = () => {
+    // Create audio context
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Create oscillator for buzzer sound
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    // Connect nodes
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    // Configure buzzer sound (lower frequency for a classic buzzer)
+    oscillator.type = 'square';
+    oscillator.frequency.setValueAtTime(200, audioContext.currentTime); // 200Hz buzzer
+
+    // Envelope for the buzz
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+
+    // Play the sound
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.3);
+  };
+
   const handleBuzzIn = () => {
     if (!canBuzzIn || buzzedIn) return;
+
+    // Play buzzer sound
+    playBuzzerSound();
 
     setBuzzedIn(true);
 
