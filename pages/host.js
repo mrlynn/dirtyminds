@@ -4,7 +4,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { QRCodeSVG } from 'qrcode.react';
 import { nanoid } from 'nanoid';
-import { getPusherClient } from '../lib/pusher';
+import PusherClient from 'pusher-js';
 import riddlesData from '../data/riddles';
 import Scoreboard from '../components/Scoreboard';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -29,19 +29,19 @@ export default function HostGame() {
       const code = nanoid(6).toUpperCase();
       setGameCode(code);
 
-      // Initialize Pusher
-      const pusherClient = getPusherClient();
-      if (!pusherClient) {
-        console.error('Pusher not configured');
-        return;
-      }
-      setPusher(pusherClient);
+      // Initialize Pusher with host auth
+      const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
+        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
+        authEndpoint: '/api/pusher/auth',
+        auth: {
+          params: {
+            user_id: hostId,
+            user_info: { name: 'Host', isHost: true },
+          },
+        },
+      });
 
-      // Configure host user data for presence channel
-      pusherClient.config.auth.params = {
-        user_id: hostId,
-        user_info: { name: 'Host', isHost: true },
-      };
+      setPusher(pusherClient);
 
       const channel = pusherClient.subscribe(`presence-game-${code}`);
 

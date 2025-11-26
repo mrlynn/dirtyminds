@@ -13,7 +13,7 @@ import {
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { nanoid } from 'nanoid';
-import { getPusherClient } from '../lib/pusher';
+import PusherClient from 'pusher-js';
 import TouchAppIcon from '@mui/icons-material/TouchApp';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -46,19 +46,19 @@ export default function JoinGame() {
   const handleJoinGame = () => {
     if (!gameCode || !playerName) return;
 
-    const pusherClient = getPusherClient();
-    if (!pusherClient) {
-      alert('Pusher not configured. Check environment variables.');
-      return;
-    }
+    // Create Pusher client with auth params
+    const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
+      authEndpoint: '/api/pusher/auth',
+      auth: {
+        params: {
+          user_id: playerId,
+          user_info: { name: playerName },
+        },
+      },
+    });
 
     setPusher(pusherClient);
-
-    // Configure user data for presence channel
-    pusherClient.config.auth.params = {
-      user_id: playerId,
-      user_info: { name: playerName },
-    };
 
     const channel = pusherClient.subscribe(`presence-game-${gameCode}`);
 
