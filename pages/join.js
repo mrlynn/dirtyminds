@@ -44,36 +44,46 @@ export default function JoinGame() {
   }, [code]);
 
   const handleJoinGame = () => {
-    if (!gameCode || !playerName) return;
+    if (!gameCode || !playerName) {
+      alert('Please enter your name and game code');
+      return;
+    }
 
-    // Create Pusher client with auth params
-    const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
-      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
-      authEndpoint: '/api/pusher/auth',
-      auth: {
-        params: {
-          user_id: playerId,
-          user_info: { name: playerName },
+    console.log('Attempting to join game:', gameCode, 'as', playerName);
+
+    try {
+      // Create Pusher client with auth params
+      const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
+        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
+        authEndpoint: '/api/pusher/auth',
+        auth: {
+          params: {
+            user_id: playerId,
+            user_info: JSON.stringify({ name: playerName }),
+          },
         },
-      },
-    });
+      });
 
-    setPusher(pusherClient);
+      console.log('Pusher client created');
 
-    const channel = pusherClient.subscribe(`presence-game-${gameCode}`);
+      setPusher(pusherClient);
 
-    // Authenticate with player info
-    channel.bind('pusher:subscription_succeeded', () => {
-      setJoined(true);
-    });
+      const channel = pusherClient.subscribe(`presence-game-${gameCode}`);
+      console.log('Subscribing to channel:', `presence-game-${gameCode}`);
 
-    channel.bind('pusher:subscription_error', (error) => {
-      console.error('Pusher subscription error:', error);
-      alert('Could not join game. Check the game code.');
-    });
+      // Authenticate with player info
+      channel.bind('pusher:subscription_succeeded', (members) => {
+        console.log('Successfully joined game!', members);
+        setJoined(true);
+      });
 
-    // Listen for game events
-    channel.bind('client-game-started', (data) => {
+      channel.bind('pusher:subscription_error', (error) => {
+        console.error('Pusher subscription error:', error);
+        alert('Could not join game. Check the game code or try again.');
+      });
+
+      // Listen for game events
+      channel.bind('client-game-started', (data) => {
       setGameStarted(true);
       setTotalRiddles(data.riddleCount);
       setRiddleNumber(1);
@@ -110,17 +120,13 @@ export default function JoinGame() {
       setBuzzResult(null);
     });
 
-    channel.bind('client-game-over', () => {
-      setCanBuzzIn(false);
-    });
-
-    // Send player info
-    pusherClient.user = {
-      id: playerId,
-      info: {
-        name: playerName,
-      },
-    };
+      channel.bind('client-game-over', () => {
+        setCanBuzzIn(false);
+      });
+    } catch (error) {
+      console.error('Error creating Pusher client:', error);
+      alert('Failed to connect. Please try again.');
+    }
   };
 
   const handleBuzzIn = () => {
