@@ -1,0 +1,88 @@
+
+> dirty-minds-lite@0.1.0 test:headed
+> playwright test --headed
+
+[2m[WebServer] [22m [33m[1m⚠[22m[39m Warning: Next.js inferred your workspace root, but it may not be correct.
+[2m[WebServer] [22m We detected multiple lockfiles and selected the directory of /Users/michael.lynn/package-lock.json as the root directory.
+[2m[WebServer] [22m To silence this warning, set `turbopack.root` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+[2m[WebServer] [22m   See https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack#root-directory for more information.
+[2m[WebServer] [22m Detected additional lockfiles: 
+[2m[WebServer] [22m   * /Users/michael.lynn/code/dirty-minds-lite/package-lock.json
+[2m[WebServer] [22m
+
+Running 1 test using 1 worker
+
+
+🎮 Starting Dirty Minds Test Harness...
+
+📺 Host: Creating game...
+✅ Game created with code: GTM39M
+
+👥 Spawning 4 players...
+   - Player1 joining...
+   ✓ Player1 joined successfully
+   - Player2 joining...
+   ✓ Player2 joined successfully
+   - Player3 joining...
+   ✓ Player3 joined successfully
+   - Player4 joining...
+   ✓ Player4 joined successfully
+
+✅ All 4 players in lobby
+
+🎯 Host: Starting game...
+✅ Game started!
+
+📖 Phase: RIDDLE DISPLAY (5s countdown)
+   ⏳ Waiting for auto-progression...
+
+✏️  Phase: ANSWERING (Players submitting answers)
+   ⚠️  Player1 couldn't submit answer: locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+[2m  - waiting for locator('input[type="text"], textarea').first() to be visible[22m
+
+   ⚠️  Player2 couldn't submit answer: locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+[2m  - waiting for locator('input[type="text"], textarea').first() to be visible[22m
+
+   ⚠️  Player3 couldn't submit answer: locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+[2m  - waiting for locator('input[type="text"], textarea').first() to be visible[22m
+
+   ⚠️  Player4 couldn't submit answer: locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+[2m  - waiting for locator('input[type="text"], textarea').first() to be visible[22m
+
+
+✅ All answers submitted
+
+🎯 Phase: REVEAL CORRECT ANSWER (5s)
+
+📋 Phase: REVEAL PLAYER ANSWERS
+
+🗳️  Phase: VOTING (Players voting)
+   ⚠️  Player1 couldn't find vote buttons
+   ⚠️  Player2 couldn't find vote buttons
+   ⚠️  Player3 couldn't find vote buttons
+   ⚠️  Player4 couldn't find vote buttons
+
+✅ All votes cast
+
+🏆 Phase: RESULTS (10s)
+   ✓ Round 1 complete!
+
+📸 Taking screenshots...
+   ✓ Screenshots saved to test-results/
+
+⏸️  Pausing to view results...
+
+🔍 Verifying game state...
+
+✅ TEST PASSED: Complete game flow executed successfully!
+
+
+✅ Test completed!
+
+  ✓  1 tests/game-flow.test.js:51:3 › Dirty Minds Game Flow › Complete game flow with multiple players (1.6m)
+
+  1 passed (1.7m)

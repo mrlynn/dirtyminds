@@ -39,10 +39,26 @@ export default function HostGame() {
   const phaseTimerRef = useRef(null);
 
   const channelRef = useRef(null);
+  const riddlesRef = useRef([]);
+  const currentRiddleIndexRef = useRef(0);
+  const submittedAnswersRef = useRef([]);
 
   useEffect(() => {
     setCanShare(typeof navigator !== 'undefined' && !!navigator.share);
   }, []);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    riddlesRef.current = riddles;
+  }, [riddles]);
+
+  useEffect(() => {
+    currentRiddleIndexRef.current = currentRiddleIndex;
+  }, [currentRiddleIndex]);
+
+  useEffect(() => {
+    submittedAnswersRef.current = submittedAnswers;
+  }, [submittedAnswers]);
 
   useEffect(() => {
     const createGame = async () => {
@@ -153,13 +169,22 @@ export default function HostGame() {
         clearTimeout(phaseTimerRef.current);
       }
 
+      // Use refs to access current values
+      const currentRiddles = riddlesRef.current;
+      const riddleIndex = currentRiddleIndexRef.current;
+      const answers = submittedAnswersRef.current;
+
       switch (currentPhase) {
         case 'riddle-display':
           // Move to answering
           console.log('Moving to answering phase');
+          if (!currentRiddles[riddleIndex]) {
+            console.error('No riddle at index:', riddleIndex);
+            return currentPhase;
+          }
           channel.trigger('client-phase-change', {
             phase: 'answering',
-            riddle: riddles[currentRiddleIndex].clue,
+            riddle: currentRiddles[riddleIndex].clue,
           });
 
           // Auto-progress after 60 seconds (or when all answers in)
@@ -173,9 +198,13 @@ export default function HostGame() {
         case 'answering':
           // Move to reveal correct answer
           console.log('Moving to reveal-correct phase');
+          if (!currentRiddles[riddleIndex]) {
+            console.error('No riddle at index:', riddleIndex);
+            return currentPhase;
+          }
           channel.trigger('client-phase-change', {
             phase: 'reveal-correct',
-            correctAnswer: riddles[currentRiddleIndex].answer,
+            correctAnswer: currentRiddles[riddleIndex].answer,
           });
           playSound('correct');
 
@@ -192,7 +221,7 @@ export default function HostGame() {
           console.log('Moving to reveal-answers phase');
 
           // Shuffle answers for anonymity
-          const shuffledAnswers = [...submittedAnswers].sort(() => Math.random() - 0.5);
+          const shuffledAnswers = [...answers].sort(() => Math.random() - 0.5);
 
           channel.trigger('client-phase-change', {
             phase: 'reveal-answers',
