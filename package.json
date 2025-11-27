@@ -13,12 +13,15 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.5",
     "@mui/material": "^7.3.5",
+    "framer-motion": "^12.23.24",
+    "howler": "^2.2.4",
     "nanoid": "^5.1.6",
     "next": "^16.0.4",
     "pusher": "^5.2.0",
     "pusher-js": "^8.4.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
+    "react-confetti": "^6.4.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {

@@ -5,232 +5,170 @@ import {
   Card,
   CardContent,
   Typography,
-  Button,
   TextField,
+  Button,
   Stack,
   Chip,
+  LinearProgress,
 } from '@mui/material';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
+import { motion, AnimatePresence } from 'framer-motion';
 import { nanoid } from 'nanoid';
 import PusherClient from 'pusher-js';
-import TouchAppIcon from '@mui/icons-material/TouchApp';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CancelIcon from '@mui/icons-material/Cancel';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import SendIcon from '@mui/icons-material/Send';
+import HowToVoteIcon from '@mui/icons-material/HowToVote';
+import { playSound } from '../utils/sounds';
+import Celebration from '../components/Celebration';
 
 export default function JoinGame() {
   const router = useRouter();
-  const { code } = router.query;
+  const { code: urlCode } = router.query;
 
-  const [gameCode, setGameCode] = useState(code || '');
+  const [gameCode, setGameCode] = useState('');
   const [playerName, setPlayerName] = useState('');
   const [playerId] = useState(() => nanoid());
-  const [joined, setJoined] = useState(false);
-  const [gameStarted, setGameStarted] = useState(false);
-  const [currentRiddle, setCurrentRiddle] = useState('');
-  const [riddleNumber, setRiddleNumber] = useState(0);
-  const [totalRiddles, setTotalRiddles] = useState(0);
-  const [canBuzzIn, setCanBuzzIn] = useState(false);
-  const [buzzedIn, setBuzzedIn] = useState(false);
-  const [buzzResult, setBuzzResult] = useState(null); // 'winner', 'too-late', or null
-  const [answer, setAnswer] = useState('');
+  const [hasJoined, setHasJoined] = useState(false);
+  const [playerRole, setPlayerRole] = useState(null);
   const [myScore, setMyScore] = useState(0);
-  const [pusher, setPusher] = useState(null);
-  const [isMyTurnToRead, setIsMyTurnToRead] = useState(false);
-  const [currentReaderName, setCurrentReaderName] = useState('');
-  const [playerRole, setPlayerRole] = useState(null); // 'SAINT' or 'SINNER'
-  const [gamePhase, setGamePhase] = useState('waiting'); // 'waiting', 'answering', 'reveal', 'voting', 'scores'
+
+  const [gamePhase, setGamePhase] = useState('waiting');
+  const [currentRiddle, setCurrentRiddle] = useState('');
+  const [correctAnswer, setCorrectAnswer] = useState('');
+
   const [myAnswer, setMyAnswer] = useState('');
   const [hasSubmittedAnswer, setHasSubmittedAnswer] = useState(false);
+
   const [allAnswers, setAllAnswers] = useState([]);
   const [myCorrectVote, setMyCorrectVote] = useState(null);
   const [myFunniestVote, setMyFunniestVote] = useState(null);
-  const [answerCount, setAnswerCount] = useState(0);
-  const [totalPlayers, setTotalPlayers] = useState(0);
+
+  const [pusher, setPusher] = useState(null);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [celebrationMessage, setCelebrationMessage] = useState('');
 
   useEffect(() => {
-    if (code) {
-      setGameCode(code.toUpperCase());
+    if (urlCode) {
+      setGameCode(urlCode.toUpperCase());
     }
-  }, [code]);
+  }, [urlCode]);
 
-  const handleJoinGame = () => {
+  const handleJoinGame = async () => {
     if (!gameCode || !playerName) {
-      alert('Please enter your name and game code');
+      alert('Please enter game code and your name');
       return;
     }
 
-    console.log('Attempting to join game:', gameCode, 'as', playerName);
+    const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
+      authEndpoint: '/api/pusher/auth',
+      auth: {
+        params: {
+          user_id: playerId,
+          user_info: JSON.stringify({ name: playerName }),
+        },
+      },
+    });
+
+    setPusher(pusherClient);
 
     try {
-      // Create Pusher client with auth params
-      const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
-        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
-        authEndpoint: '/api/pusher/auth',
-        auth: {
-          params: {
-            user_id: playerId,
-            user_info: JSON.stringify({ name: playerName }),
-          },
-        },
-      });
-
-      console.log('Pusher client created');
-
-      setPusher(pusherClient);
-
       const channel = pusherClient.subscribe(`presence-game-${gameCode}`);
-      console.log('Subscribing to channel:', `presence-game-${gameCode}`);
 
-      // Authenticate with player info
-      channel.bind('pusher:subscription_succeeded', (members) => {
-        console.log('Successfully joined game!', members);
-        setJoined(true);
+      channel.bind('pusher:subscription_succeeded', () => {
+        setHasJoined(true);
+        playSound('join');
       });
 
-      // Listen for role assignment
+      channel.bind('pusher:subscription_error', () => {
+        alert('Could not join game. Check the code and try again.');
+      });
+
+      // Role assignment
       channel.bind('client-role-assigned', (data) => {
         if (data.playerId === playerId) {
-          console.log('Role assigned:', data.role);
           setPlayerRole(data.role);
+          playSound(data.role === 'SAINT' ? 'saint' : 'sinner');
         }
       });
 
-      channel.bind('pusher:subscription_error', (error) => {
-        console.error('Pusher subscription error:', error);
-        alert('Could not join game. Check the game code or try again.');
-      });
-
-      // Listen for game events
+      // Game started
       channel.bind('client-game-started', (data) => {
-        setGameStarted(true);
-        setTotalRiddles(data.riddleCount);
-        setRiddleNumber(1);
-        setCurrentRiddle(data.firstRiddle);
-        setCanBuzzIn(true);
-        setIsMyTurnToRead(data.readerId === playerId);
-        setCurrentReaderName(data.readerName);
-        setGamePhase(data.gamePhase || 'answering');
-        setHasSubmittedAnswer(false);
-        setMyAnswer('');
-      });
-
-      channel.bind('client-next-riddle', (data) => {
+        setGamePhase(data.gamePhase);
         setCurrentRiddle(data.riddle);
-        setRiddleNumber(data.riddleIndex + 1);
-        setCanBuzzIn(true);
-        setBuzzedIn(false);
-        setBuzzResult(null);
-        setAnswer('');
-        setIsMyTurnToRead(data.readerId === playerId);
-        setCurrentReaderName(data.readerName);
-        setGamePhase(data.gamePhase || 'answering');
-        setHasSubmittedAnswer(false);
-        setMyAnswer('');
-        setAllAnswers([]);
-        setMyCorrectVote(null);
-        setMyFunniestVote(null);
-        setAnswerCount(0);
       });
 
-    channel.bind('client-buzz-result', (data) => {
-      if (data.winner === playerId) {
-        setBuzzResult('winner');
-      } else {
-        setBuzzResult('too-late');
-      }
-      setCanBuzzIn(false);
-    });
+      // Phase changes
+      channel.bind('client-phase-change', (data) => {
+        console.log('Phase change:', data);
+        setGamePhase(data.phase);
 
-    channel.bind('client-answer-count-update', (data) => {
-      setAnswerCount(data.count);
-      setTotalPlayers(data.total);
-    });
+        if (data.phase === 'riddle-display') {
+          setCurrentRiddle(data.riddle);
+          setMyAnswer('');
+          setHasSubmittedAnswer(false);
+          setMyCorrectVote(null);
+          setMyFunniestVote(null);
+          setAllAnswers([]);
+        }
 
-    channel.bind('client-answers-locked', (data) => {
-      setGamePhase(data.gamePhase || 'reveal');
-    });
+        if (data.phase === 'answering') {
+          setCurrentRiddle(data.riddle);
+        }
 
-    channel.bind('client-reveal-answer', (data) => {
-      setAnswer(data.answer);
-      setGamePhase(data.gamePhase || 'voting');
-      setAllAnswers(data.submittedAnswers || []);
-    });
+        if (data.phase === 'reveal-correct') {
+          setCorrectAnswer(data.correctAnswer);
+        }
 
-    channel.bind('client-scores-updated', (data) => {
-      setGamePhase(data.gamePhase || 'scores');
-      const myPlayer = data.players.find((p) => p.id === playerId);
-      if (myPlayer) {
-        setMyScore(myPlayer.score);
-      }
-    });
+        if (data.phase === 'reveal-answers') {
+          setAllAnswers(data.answers);
+        }
+      });
 
-    channel.bind('client-point-awarded', (data) => {
-      if (data.playerId === playerId) {
-        setMyScore(data.newScore);
-      }
-      setBuzzedIn(false);
-      setBuzzResult(null);
-    });
+      // Results
+      channel.bind('client-results', (data) => {
+        setGamePhase(data.phase);
 
-      channel.bind('client-game-over', () => {
-        setCanBuzzIn(false);
+        // Update my score
+        const me = data.players.find((p) => p.id === playerId);
+        if (me) {
+          const scoreGained = me.score - myScore;
+          setMyScore(me.score);
+
+          if (scoreGained > 0) {
+            // I won something!
+            if (data.correctWinner && data.correctWinner.id === playerId) {
+              setCelebrationMessage('Most Correct! +' + scoreGained);
+              setShowCelebration(true);
+              setTimeout(() => setShowCelebration(false), 3000);
+            } else if (data.funniestWinner && data.funniestWinner.id === playerId) {
+              setCelebrationMessage('Funniest! +' + scoreGained);
+              setShowCelebration(true);
+              setTimeout(() => setShowCelebration(false), 3000);
+            }
+          }
+        }
+      });
+
+      // Game over
+      channel.bind('client-game-over', (data) => {
+        setGamePhase('game-over');
+        const me = data.finalScores.find((p) => p.id === playerId);
+        if (me) {
+          setMyScore(me.score);
+        }
       });
     } catch (error) {
-      console.error('Error creating Pusher client:', error);
-      alert('Failed to connect. Please try again.');
-    }
-  };
-
-  const playBuzzerSound = () => {
-    // Create audio context
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-    // Create oscillator for buzzer sound
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    // Connect nodes
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-
-    // Configure buzzer sound (lower frequency for a classic buzzer)
-    oscillator.type = 'square';
-    oscillator.frequency.setValueAtTime(200, audioContext.currentTime); // 200Hz buzzer
-
-    // Envelope for the buzz
-    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
-
-    // Play the sound
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + 0.3);
-  };
-
-  const handleBuzzIn = () => {
-    if (!canBuzzIn || buzzedIn) return;
-
-    // Play buzzer sound
-    playBuzzerSound();
-
-    setBuzzedIn(true);
-
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-buzz-in', {
-        playerId,
-        playerName,
-        timestamp: Date.now(),
-      });
+      console.error('Error joining game:', error);
+      alert('Failed to join game');
     }
   };
 
   const handleSubmitAnswer = () => {
-    if (!myAnswer.trim() || hasSubmittedAnswer) return;
-
-    setHasSubmittedAnswer(true);
+    if (!myAnswer.trim()) {
+      alert('Please enter an answer');
+      return;
+    }
 
     if (pusher) {
       const channel = pusher.channel(`presence-game-${gameCode}`);
@@ -238,551 +176,454 @@ export default function JoinGame() {
         playerId,
         playerName,
         role: playerRole,
-        answer: myAnswer.trim(),
+        answer: myAnswer,
       });
+
+      setHasSubmittedAnswer(true);
+      playSound('click');
     }
   };
 
   const handleVote = (voteType, answerId) => {
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-vote-cast', {
-        voterId: playerId,
-        voteType, // 'correct' or 'funniest'
-        answerId,
-      });
+    if (!pusher) return;
 
-      if (voteType === 'correct') {
-        setMyCorrectVote(answerId);
-      } else if (voteType === 'funniest') {
-        setMyFunniestVote(answerId);
-      }
+    const channel = pusher.channel(`presence-game-${gameCode}`);
+    channel.trigger('client-vote-cast', {
+      voterId: playerId,
+      voteType,
+      answerId,
+    });
+
+    if (voteType === 'correct') {
+      setMyCorrectVote(answerId);
+    } else {
+      setMyFunniestVote(answerId);
     }
+
+    playSound('vote');
   };
 
-  // Game Master Controls (only active player whose turn it is to read)
-  const handleGMLockAnswers = () => {
-    if (!isMyTurnToRead || !pusher) return;
-
-    const channel = pusher.channel(`presence-game-${gameCode}`);
-    channel.trigger('client-gm-lock-answers', {
-      gameMasterId: playerId,
-      gameMasterName: playerName,
-    });
+  const getRoleInfo = () => {
+    if (playerRole === 'SAINT') {
+      return {
+        icon: '😇',
+        label: 'Saint',
+        color: 'primary',
+        description: 'Submit the MOST CORRECT answer',
+      };
+    } else if (playerRole === 'SINNER') {
+      return {
+        icon: '😈',
+        label: 'Sinner',
+        color: 'secondary',
+        description: 'Submit the FUNNIEST/DIRTIEST answer',
+      };
+    }
+    return null;
   };
 
-  const handleGMRevealAnswer = () => {
-    if (!isMyTurnToRead || !pusher) return;
-
-    const channel = pusher.channel(`presence-game-${gameCode}`);
-    channel.trigger('client-gm-reveal-answer', {
-      gameMasterId: playerId,
-      gameMasterName: playerName,
-    });
-  };
-
-  const handleGMFinishVoting = () => {
-    if (!isMyTurnToRead || !pusher) return;
-
-    const channel = pusher.channel(`presence-game-${gameCode}`);
-    channel.trigger('client-gm-finish-voting', {
-      gameMasterId: playerId,
-      gameMasterName: playerName,
-    });
-  };
-
-  const handleGMNextRiddle = () => {
-    if (!isMyTurnToRead || !pusher) return;
-
-    const channel = pusher.channel(`presence-game-${gameCode}`);
-    channel.trigger('client-gm-next-riddle', {
-      gameMasterId: playerId,
-      gameMasterName: playerName,
-    });
-  };
+  const roleInfo = getRoleInfo();
 
   return (
     <>
       <Head>
         <title>Join Game - Dirty Minds</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </Head>
 
       <Container maxWidth="sm">
         <Box sx={{ py: 4, minHeight: '100vh' }}>
-          {!joined ? (
-            <Card>
-              <CardContent>
-                <Typography variant="h5" gutterBottom sx={{ fontWeight: 700, textAlign: 'center' }}>
-                  Join Game
-                </Typography>
-
-                <Stack spacing={2} sx={{ mt: 3 }}>
-                  <TextField
-                    fullWidth
-                    label="Your Name"
-                    variant="outlined"
-                    value={playerName}
-                    onChange={(e) => setPlayerName(e.target.value)}
-                    placeholder="Enter your name"
-                  />
-
-                  <TextField
-                    fullWidth
-                    label="Game Code"
-                    variant="outlined"
-                    value={gameCode}
-                    onChange={(e) => setGameCode(e.target.value.toUpperCase())}
-                    placeholder="Enter 6-digit code"
-                    inputProps={{ style: { textTransform: 'uppercase' } }}
-                  />
-
-                  <Button
-                    fullWidth
-                    variant="contained"
-                    color="primary"
-                    size="large"
-                    onClick={handleJoinGame}
-                    disabled={!gameCode || !playerName}
-                  >
-                    Join Game
-                  </Button>
-                </Stack>
-              </CardContent>
-            </Card>
-          ) : !gameStarted ? (
-            <Card>
-              <CardContent>
-                <Typography variant="h5" gutterBottom sx={{ fontWeight: 700, textAlign: 'center', color: 'primary.main' }}>
-                  Connected!
-                </Typography>
-                <Typography variant="body1" sx={{ textAlign: 'center', color: 'text.secondary', mb: 3 }}>
-                  Welcome, {playerName}
-                </Typography>
-
-                {playerRole && (
-                  <Box
-                    sx={{
-                      p: 2,
-                      mb: 3,
-                      bgcolor: playerRole === 'SAINT' ? 'rgba(0, 237, 100, 0.2)' : 'rgba(255, 92, 147, 0.2)',
-                      border: '2px solid',
-                      borderColor: playerRole === 'SAINT' ? 'primary.main' : 'secondary.main',
-                      borderRadius: 2,
-                      textAlign: 'center',
-                    }}
-                  >
-                    <Typography variant="h6" sx={{ fontWeight: 700, color: playerRole === 'SAINT' ? 'primary.main' : 'secondary.main' }}>
-                      {playerRole === 'SAINT' ? '😇 You are a SAINT' : '😈 You are a SINNER'}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1 }}>
-                      {playerRole === 'SAINT'
-                        ? 'Your goal: Submit the most CORRECT answer'
-                        : 'Your goal: Submit the most FILTHY-SOUNDING (but safe) answer'}
-                    </Typography>
-                  </Box>
-                )}
-
-                <Box
-                  sx={{
-                    p: 3,
-                    bgcolor: 'rgba(255, 255, 255, 0.05)',
-                    borderRadius: 2,
-                    textAlign: 'center',
-                  }}
-                >
-                  <Typography variant="body1" sx={{ color: 'text.secondary' }}>
-                    Waiting for host to start the game...
-                  </Typography>
-                </Box>
-              </CardContent>
-            </Card>
-          ) : (
-            <Box>
-              <Card sx={{ mb: 2 }}>
+          {/* Join Form */}
+          {!hasJoined && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card>
                 <CardContent>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                      {playerName}
-                    </Typography>
-                    <Chip label={`Score: ${myScore}`} color="primary" sx={{ fontWeight: 700 }} />
+                  <Typography variant="h4" gutterBottom sx={{ fontWeight: 700, textAlign: 'center' }}>
+                    Join Game
+                  </Typography>
+
+                  <Stack spacing={2} sx={{ mt: 3 }}>
+                    <TextField
+                      fullWidth
+                      label="Game Code"
+                      value={gameCode}
+                      onChange={(e) => setGameCode(e.target.value.toUpperCase())}
+                      placeholder="Enter 6-digit code"
+                      inputProps={{ maxLength: 6 }}
+                    />
+
+                    <TextField
+                      fullWidth
+                      label="Your Name"
+                      value={playerName}
+                      onChange={(e) => setPlayerName(e.target.value)}
+                      placeholder="Enter your name"
+                    />
+
+                    <Button
+                      fullWidth
+                      variant="contained"
+                      size="large"
+                      onClick={handleJoinGame}
+                      disabled={!gameCode || !playerName}
+                      sx={{ py: 2 }}
+                    >
+                      Join Game
+                    </Button>
                   </Stack>
                 </CardContent>
               </Card>
+            </motion.div>
+          )}
 
+          {/* Game Screen */}
+          {hasJoined && (
+            <Box>
+              {/* Header with Role & Score */}
+              <Card sx={{ mb: 2 }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        {playerName}
+                      </Typography>
+                      {roleInfo && (
+                        <Chip
+                          icon={<span>{roleInfo.icon}</span>}
+                          label={roleInfo.label}
+                          color={roleInfo.color}
+                          size="small"
+                        />
+                      )}
+                    </Box>
+                    <Box sx={{ textAlign: 'right' }}>
+                      <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                        {myScore}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        points
+                      </Typography>
+                    </Box>
+                  </Box>
+                </CardContent>
+              </Card>
+
+              {/* Main Game Area */}
               <Card>
                 <CardContent>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-                    <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                      Riddle {riddleNumber} of {totalRiddles}
-                    </Typography>
-                    <Chip
-                      label={gamePhase === 'answering' ? 'Answering' : gamePhase === 'reveal' ? 'Locked' : gamePhase === 'voting' ? 'Voting' : 'Scores'}
-                      color={gamePhase === 'voting' ? 'secondary' : gamePhase === 'scores' ? 'primary' : 'default'}
-                      size="small"
-                    />
-                  </Stack>
-
-                  {/* Show whose turn it is to read */}
-                  {isMyTurnToRead ? (
-                    <Box
-                      sx={{
-                        p: 2,
-                        mb: 2,
-                        bgcolor: 'rgba(0, 237, 100, 0.2)',
-                        border: '2px solid',
-                        borderColor: 'primary.main',
-                        borderRadius: 2,
-                        textAlign: 'center',
-                      }}
+                  {/* Waiting for Game */}
+                  {gamePhase === 'waiting' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
                     >
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main' }}>
-                        🎮 You're the Game Master!
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
-                        Read this riddle out loud to the group
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                        You'll control the reveal & voting phases
-                      </Typography>
-                    </Box>
-                  ) : currentReaderName && (
-                    <Box
-                      sx={{
-                        p: 2,
-                        mb: 2,
-                        bgcolor: 'rgba(255, 255, 255, 0.05)',
-                        borderRadius: 2,
-                        textAlign: 'center',
-                      }}
-                    >
-                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                        🎮 {currentReaderName} is the Game Master
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {/* Display the current riddle */}
-                  {currentRiddle && (
-                    <Box
-                      sx={{
-                        p: 3,
-                        mb: 3,
-                        bgcolor: 'rgba(255, 255, 255, 0.05)',
-                        borderRadius: 2,
-                        minHeight: 100,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Typography variant="h6" sx={{ textAlign: 'center', lineHeight: 1.6 }}>
-                        {currentRiddle}
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {/* Role Badge */}
-                  {playerRole && (
-                    <Chip
-                      label={playerRole === 'SAINT' ? '😇 Saint' : '😈 Sinner'}
-                      color={playerRole === 'SAINT' ? 'primary' : 'secondary'}
-                      sx={{ mb: 2, fontWeight: 700 }}
-                    />
-                  )}
-
-                  {/* ANSWERING PHASE */}
-                  {gamePhase === 'answering' && !hasSubmittedAnswer && !isMyTurnToRead && (
-                    <Box sx={{ mb: 3 }}>
-                      <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary', fontWeight: 600 }}>
-                        {playerRole === 'SAINT'
-                          ? '😇 Submit your CLEAN/INNOCENT guess:'
-                          : '😈 Submit your FILTHY-SOUNDING (but safe) guess:'}
-                      </Typography>
-                      <TextField
-                        fullWidth
-                        multiline
-                        rows={2}
-                        variant="outlined"
-                        placeholder={playerRole === 'SAINT'
-                          ? 'Enter your clean, innocent answer...'
-                          : 'Enter your filthiest-sounding (clean) guess...'}
-                        value={myAnswer}
-                        onChange={(e) => setMyAnswer(e.target.value)}
-                        sx={{ mb: 2 }}
-                      />
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color={playerRole === 'SAINT' ? 'primary' : 'secondary'}
-                        size="large"
-                        onClick={handleSubmitAnswer}
-                        disabled={!myAnswer.trim()}
-                        sx={{ py: 2, fontWeight: 700 }}
-                      >
-                        Submit Answer
-                      </Button>
-                    </Box>
-                  )}
-
-                  {/* GAME MASTER: Answer submission tracking */}
-                  {gamePhase === 'answering' && isMyTurnToRead && (
-                    <Box sx={{ mb: 3 }}>
-                      <Box
-                        sx={{
-                          p: 3,
-                          mb: 2,
-                          bgcolor: 'rgba(0, 237, 100, 0.1)',
-                          border: '2px solid',
-                          borderColor: 'primary.main',
-                          borderRadius: 2,
-                          textAlign: 'center',
-                        }}
-                      >
-                        <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>
-                          Answers: {answerCount} / {totalPlayers - 1}
+                      <Box sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography variant="h5" gutterBottom>
+                          Waiting for game to start...
                         </Typography>
-                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                          (You don't submit - you're the Game Master!)
+                        {roleInfo && (
+                          <Box sx={{ mt: 3, p: 3, bgcolor: 'rgba(255, 255, 255, 0.05)', borderRadius: 2 }}>
+                            <Typography variant="h6" gutterBottom>
+                              {roleInfo.icon} You are a {roleInfo.label}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {roleInfo.description}
+                            </Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </motion.div>
+                  )}
+
+                  {/* Riddle Display */}
+                  {gamePhase === 'riddle-display' && (
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                    >
+                      <Box sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
+                          Get Ready!
+                        </Typography>
+                        <Typography variant="h6" color="text.secondary">
+                          Next riddle starting...
                         </Typography>
                       </Box>
-
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="primary"
-                        size="large"
-                        onClick={handleGMLockAnswers}
-                        disabled={answerCount === 0}
-                        sx={{ py: 2, fontWeight: 700 }}
-                      >
-                        Lock Answers ({answerCount} received)
-                      </Button>
-                    </Box>
+                    </motion.div>
                   )}
 
-                  {gamePhase === 'answering' && hasSubmittedAnswer && (
-                    <Box
-                      sx={{
-                        p: 3,
-                        mb: 3,
-                        bgcolor: 'rgba(0, 237, 100, 0.2)',
-                        border: '2px solid',
-                        borderColor: 'primary.main',
-                        borderRadius: 2,
-                        textAlign: 'center',
-                      }}
+                  {/* Answering Phase */}
+                  {gamePhase === 'answering' && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
                     >
-                      <CheckCircleIcon sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main' }}>
-                        Answer Submitted!
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-                        Waiting for other players...
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {/* REVEAL PHASE */}
-                  {gamePhase === 'reveal' && !isMyTurnToRead && (
-                    <Box
-                      sx={{
-                        p: 3,
-                        mb: 3,
-                        bgcolor: 'rgba(255, 255, 255, 0.05)',
-                        borderRadius: 2,
-                        textAlign: 'center',
-                      }}
-                    >
-                      <Typography variant="body1" sx={{ color: 'text.secondary' }}>
-                        Answers are locked! Waiting for Game Master to reveal...
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {/* GAME MASTER: Reveal button */}
-                  {gamePhase === 'reveal' && isMyTurnToRead && (
-                    <Box sx={{ mb: 3 }}>
-                      <Box
-                        sx={{
-                          p: 3,
-                          mb: 2,
-                          bgcolor: 'rgba(0, 237, 100, 0.1)',
-                          border: '2px solid',
-                          borderColor: 'primary.main',
-                          borderRadius: 2,
-                          textAlign: 'center',
-                        }}
-                      >
-                        <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                          All answers are locked!
+                      <Box sx={{ mb: 3, p: 3, bgcolor: 'rgba(255, 255, 255, 0.05)', borderRadius: 2 }}>
+                        <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+                          {currentRiddle}
                         </Typography>
-                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                          Ready to reveal the answer and start voting?
-                        </Typography>
+                        {roleInfo && (
+                          <Chip
+                            label={roleInfo.description}
+                            color={roleInfo.color}
+                            size="small"
+                          />
+                        )}
                       </Box>
 
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="primary"
-                        size="large"
-                        onClick={handleGMRevealAnswer}
-                        startIcon={<VisibilityIcon />}
-                        sx={{ py: 2, fontWeight: 700 }}
-                      >
-                        Reveal Answer & Start Voting
-                      </Button>
-                    </Box>
-                  )}
-
-                  {/* VOTING PHASE */}
-                  {gamePhase === 'voting' && (
-                    <Box sx={{ mb: 3 }}>
-                      {answer && (
-                        <Box
-                          sx={{
-                            p: 3,
-                            mb: 3,
-                            bgcolor: 'rgba(0, 237, 100, 0.1)',
-                            border: '2px solid',
-                            borderColor: 'primary.main',
-                            borderRadius: 2,
-                          }}
-                        >
-                          <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, textTransform: 'uppercase' }}>
-                            Correct Answer
-                          </Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 700, mt: 1 }}>
-                            {answer}
-                          </Typography>
-                        </Box>
-                      )}
-
-                      <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
-                        All Answers:
-                      </Typography>
-
-                      {allAnswers.map((ans, idx) => (
-                        <Box
-                          key={idx}
-                          sx={{
-                            p: 2,
-                            mb: 2,
-                            bgcolor: 'rgba(255, 255, 255, 0.05)',
-                            borderRadius: 2,
-                            border: ans.playerId === playerId ? '2px solid' : 'none',
-                            borderColor: 'primary.main',
-                          }}
-                        >
-                          <Typography variant="body1" sx={{ mb: 1 }}>
-                            {ans.answer}
-                          </Typography>
-                          {!isMyTurnToRead && (
-                            <Stack direction="row" spacing={1}>
-                              <Button
-                                size="small"
-                                variant={myCorrectVote === ans.playerId ? 'contained' : 'outlined'}
-                                color="primary"
-                                onClick={() => handleVote('correct', ans.playerId)}
-                                disabled={ans.playerId === playerId}
-                              >
-                                Most Correct
-                              </Button>
-                              <Button
-                                size="small"
-                                variant={myFunniestVote === ans.playerId ? 'contained' : 'outlined'}
-                                color="secondary"
-                                onClick={() => handleVote('funniest', ans.playerId)}
-                                disabled={ans.playerId === playerId}
-                              >
-                                Funniest/Filthiest
-                              </Button>
-                            </Stack>
-                          )}
-                        </Box>
-                      ))}
-
-                      {/* GAME MASTER: Finish Voting button */}
-                      {isMyTurnToRead && (
-                        <Box sx={{ mt: 3 }}>
-                          <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mb: 2, color: 'text.secondary' }}>
-                            You're the Game Master - wait for others to vote
-                          </Typography>
+                      {!hasSubmittedAnswer ? (
+                        <Stack spacing={2}>
+                          <TextField
+                            fullWidth
+                            multiline
+                            rows={3}
+                            label="Your Answer"
+                            value={myAnswer}
+                            onChange={(e) => setMyAnswer(e.target.value)}
+                            placeholder={
+                              playerRole === 'SAINT'
+                                ? 'Enter the correct answer...'
+                                : 'Enter a funny/filthy-sounding answer...'
+                            }
+                          />
                           <Button
                             fullWidth
                             variant="contained"
-                            color="secondary"
                             size="large"
-                            onClick={handleGMFinishVoting}
-                            sx={{ py: 2, fontWeight: 700 }}
+                            startIcon={<SendIcon />}
+                            onClick={handleSubmitAnswer}
+                            disabled={!myAnswer.trim()}
+                            sx={{ py: 2 }}
                           >
-                            Finish Voting & Calculate Scores
+                            Submit Answer
                           </Button>
+                        </Stack>
+                      ) : (
+                        <Box sx={{ textAlign: 'center', py: 3 }}>
+                          <Typography variant="h6" color="primary.main" gutterBottom>
+                            ✓ Answer Submitted!
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Waiting for other players...
+                          </Typography>
+                          <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(255, 255, 255, 0.05)', borderRadius: 2 }}>
+                            <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                              "{myAnswer}"
+                            </Typography>
+                          </Box>
                         </Box>
                       )}
-                    </Box>
+                    </motion.div>
                   )}
 
-                  {/* SCORES PHASE */}
-                  {gamePhase === 'scores' && !isMyTurnToRead && (
-                    <Box
-                      sx={{
-                        p: 3,
-                        mb: 3,
-                        bgcolor: 'rgba(255, 255, 255, 0.05)',
-                        borderRadius: 2,
-                        textAlign: 'center',
-                      }}
+                  {/* Reveal Correct Answer */}
+                  {gamePhase === 'reveal-correct' && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
                     >
-                      <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>
-                        Round Complete!
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                        Waiting for Game Master to continue...
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {/* GAME MASTER: Next Riddle button */}
-                  {gamePhase === 'scores' && isMyTurnToRead && (
-                    <Box sx={{ mb: 3 }}>
-                      <Box
-                        sx={{
-                          p: 3,
-                          mb: 2,
-                          bgcolor: 'rgba(0, 237, 100, 0.1)',
-                          border: '2px solid',
-                          borderColor: 'primary.main',
-                          borderRadius: 2,
-                          textAlign: 'center',
-                        }}
-                      >
-                        <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>
-                          Round Complete!
+                      <Box sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography variant="h6" gutterBottom color="text.secondary">
+                          Correct Answer:
                         </Typography>
-                        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                          Scores have been updated. Ready for the next riddle?
+                        <Typography variant="h3" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                          {correctAnswer}
                         </Typography>
                       </Box>
+                    </motion.div>
+                  )}
 
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="secondary"
-                        size="large"
-                        onClick={handleGMNextRiddle}
-                        endIcon={<NavigateNextIcon />}
-                        sx={{ py: 2, fontWeight: 700 }}
-                      >
-                        Next Riddle
-                      </Button>
-                    </Box>
+                  {/* Reveal Answers */}
+                  {gamePhase === 'reveal-answers' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                    >
+                      <Typography variant="h6" gutterBottom>
+                        Player Answers:
+                      </Typography>
+                      <Stack spacing={2} sx={{ mt: 2 }}>
+                        {allAnswers.map((answer, index) => (
+                          <motion.div
+                            key={index}
+                            initial={{ x: -20, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            transition={{ delay: index * 0.1 }}
+                          >
+                            <Box
+                              sx={{
+                                p: 2,
+                                bgcolor:
+                                  answer.id === playerId
+                                    ? 'rgba(0, 237, 100, 0.1)'
+                                    : 'rgba(255, 255, 255, 0.05)',
+                                borderRadius: 2,
+                                border:
+                                  answer.id === playerId
+                                    ? '2px solid rgba(0, 237, 100, 0.5)'
+                                    : '1px solid rgba(255, 255, 255, 0.1)',
+                              }}
+                            >
+                              <Typography variant="body1">{answer.answer}</Typography>
+                              {answer.id === playerId && (
+                                <Chip label="Your Answer" size="small" color="primary" sx={{ mt: 1 }} />
+                              )}
+                            </Box>
+                          </motion.div>
+                        ))}
+                      </Stack>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>
+                        Voting will start soon...
+                      </Typography>
+                    </motion.div>
+                  )}
+
+                  {/* Voting Phase */}
+                  {gamePhase === 'voting' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                    >
+                      <Typography variant="h6" gutterBottom>
+                        Vote for the Best Answers!
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
+                        Vote in both categories (you can't vote for your own answer)
+                      </Typography>
+
+                      <Stack spacing={2}>
+                        {allAnswers.map((answer, index) => {
+                          const isMyAnswer = answer.id === playerId;
+
+                          return (
+                            <Box
+                              key={index}
+                              sx={{
+                                p: 2,
+                                bgcolor: isMyAnswer
+                                  ? 'rgba(0, 237, 100, 0.1)'
+                                  : 'rgba(255, 255, 255, 0.05)',
+                                borderRadius: 2,
+                                border: isMyAnswer
+                                  ? '2px solid rgba(0, 237, 100, 0.5)'
+                                  : '1px solid rgba(255, 255, 255, 0.1)',
+                              }}
+                            >
+                              <Typography variant="body1" sx={{ mb: 2 }}>
+                                {answer.answer}
+                              </Typography>
+
+                              {!isMyAnswer && (
+                                <Stack direction="row" spacing={1}>
+                                  <Button
+                                    fullWidth
+                                    variant={myCorrectVote === answer.id ? 'contained' : 'outlined'}
+                                    color="primary"
+                                    size="small"
+                                    startIcon={<HowToVoteIcon />}
+                                    onClick={() => handleVote('correct', answer.id)}
+                                    disabled={myCorrectVote !== null && myCorrectVote !== answer.id}
+                                  >
+                                    Most Correct
+                                  </Button>
+                                  <Button
+                                    fullWidth
+                                    variant={myFunniestVote === answer.id ? 'contained' : 'outlined'}
+                                    color="secondary"
+                                    size="small"
+                                    startIcon={<HowToVoteIcon />}
+                                    onClick={() => handleVote('funniest', answer.id)}
+                                    disabled={myFunniestVote !== null && myFunniestVote !== answer.id}
+                                  >
+                                    Funniest
+                                  </Button>
+                                </Stack>
+                              )}
+
+                              {isMyAnswer && (
+                                <Chip label="Your Answer (Can't Vote)" size="small" color="primary" />
+                              )}
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+
+                      {myCorrectVote && myFunniestVote && (
+                        <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(0, 237, 100, 0.1)', borderRadius: 2, textAlign: 'center' }}>
+                          <Typography variant="body2" color="primary.main" sx={{ fontWeight: 600 }}>
+                            ✓ Votes Submitted! Waiting for others...
+                          </Typography>
+                        </Box>
+                      )}
+                    </motion.div>
+                  )}
+
+                  {/* Results Phase */}
+                  {gamePhase === 'results' && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                    >
+                      <Box sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
+                          Round Complete!
+                        </Typography>
+                        <Typography variant="h3" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                          {myScore} points
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                          Next round starting soon...
+                        </Typography>
+                      </Box>
+                    </motion.div>
+                  )}
+
+                  {/* Game Over */}
+                  {gamePhase === 'game-over' && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                    >
+                      <Box sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
+                          Game Over!
+                        </Typography>
+                        <Typography variant="h2" sx={{ fontWeight: 700, color: 'primary.main', my: 3 }}>
+                          {myScore}
+                        </Typography>
+                        <Typography variant="h6" color="text.secondary">
+                          Final Score
+                        </Typography>
+                        <Button
+                          fullWidth
+                          variant="contained"
+                          size="large"
+                          onClick={() => router.push('/')}
+                          sx={{ mt: 4 }}
+                        >
+                          Play Again
+                        </Button>
+                      </Box>
+                    </motion.div>
                   )}
                 </CardContent>
               </Card>
             </Box>
           )}
+
+          {/* Celebration Overlay */}
+          <AnimatePresence>
+            {showCelebration && (
+              <Celebration
+                trigger={true}
+                message={celebrationMessage}
+                type={playerRole === 'SAINT' ? 'saint' : 'sinner'}
+                duration={3000}
+              />
+            )}
+          </AnimatePresence>
         </Box>
       </Container>
     </>

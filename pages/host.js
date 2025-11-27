@@ -1,17 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { Container, Box, Card, CardContent, Typography, Button, Stack, Chip } from '@mui/material';
+import React, { useState, useEffect, useRef } from 'react';
+import { Container, Box, Card, CardContent, Typography, Button, Stack, Chip, LinearProgress } from '@mui/material';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { QRCodeSVG } from 'qrcode.react';
 import { nanoid } from 'nanoid';
+import { motion, AnimatePresence } from 'framer-motion';
 import PusherClient from 'pusher-js';
 import riddlesData from '../data/riddles';
 import Scoreboard from '../components/Scoreboard';
+import Timer from '../components/Timer';
+import Celebration from '../components/Celebration';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ShareIcon from '@mui/icons-material/Share';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
+import { playSound } from '../utils/sounds';
 
 export default function HostGame() {
   const router = useRouter();
@@ -21,27 +24,31 @@ export default function HostGame() {
   const [gameStarted, setGameStarted] = useState(false);
   const [riddles, setRiddles] = useState([]);
   const [currentRiddleIndex, setCurrentRiddleIndex] = useState(0);
-  const [showAnswer, setShowAnswer] = useState(false);
-  const [buzzedPlayer, setBuzzedPlayer] = useState(null);
   const [pusher, setPusher] = useState(null);
-  const [currentReaderIndex, setCurrentReaderIndex] = useState(0);
-  const [gamePhase, setGamePhase] = useState('waiting'); // 'waiting', 'answering', 'reveal', 'voting', 'scores'
+
+  // Game phases: 'lobby' | 'riddle-display' | 'answering' | 'reveal-correct' | 'reveal-answers' | 'voting' | 'results'
+  const [gamePhase, setGamePhase] = useState('lobby');
+
   const [submittedAnswers, setSubmittedAnswers] = useState([]);
   const [votes, setVotes] = useState({ correct: {}, funniest: {} });
   const [canShare, setCanShare] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [celebrationData, setCelebrationData] = useState(null);
+
+  // Timer refs
+  const phaseTimerRef = useRef(null);
+
+  const channelRef = useRef(null);
 
   useEffect(() => {
-    // Check if Web Share API is available (client-side only)
     setCanShare(typeof navigator !== 'undefined' && !!navigator.share);
   }, []);
 
   useEffect(() => {
-    // Create game
     const createGame = async () => {
       const code = nanoid(6).toUpperCase();
       setGameCode(code);
 
-      // Initialize Pusher with host auth
       const pusherClient = new PusherClient(process.env.NEXT_PUBLIC_PUSHER_APP_KEY, {
         cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
         authEndpoint: '/api/pusher/auth',
@@ -54,28 +61,29 @@ export default function HostGame() {
       });
 
       setPusher(pusherClient);
-
       const channel = pusherClient.subscribe(`presence-game-${code}`);
+      channelRef.current = channel;
 
       // Listen for player joins
       channel.bind('pusher:member_added', (member) => {
         setPlayers((prev) => {
           if (prev.find((p) => p.id === member.id)) return prev;
-          // Randomly assign role: SAINT or SINNER
+
           const role = Math.random() < 0.5 ? 'SAINT' : 'SINNER';
           const newPlayer = {
             id: member.id,
             name: member.info.name,
             score: 0,
-            role: role
+            role: role,
           };
 
-          // Notify the player of their assigned role
+          // Notify player of their role
           channel.trigger('client-role-assigned', {
             playerId: member.id,
-            role: role
+            role: role,
           });
 
+          playSound('join');
           return [...prev, newPlayer];
         });
       });
@@ -85,26 +93,13 @@ export default function HostGame() {
         setPlayers((prev) => prev.filter((p) => p.id !== member.id));
       });
 
-      // Listen for buzz-ins
-      channel.bind('client-buzz-in', (data) => {
-        if (!buzzedPlayer) {
-          setBuzzedPlayer(data.playerId);
-          // Notify all clients who buzzed in first
-          channel.trigger('client-buzz-result', {
-            winner: data.playerId,
-            playerName: data.playerName,
-          });
-        }
-      });
-
       // Listen for answer submissions
       channel.bind('client-answer-submitted', (data) => {
         setSubmittedAnswers((prev) => {
-          // Avoid duplicates
           if (prev.find((a) => a.playerId === data.playerId)) return prev;
           const newAnswers = [...prev, data];
 
-          // Broadcast answer count update to all players
+          // Broadcast count update
           channel.trigger('client-answer-count-update', {
             count: newAnswers.length,
             total: players.length,
@@ -116,173 +111,16 @@ export default function HostGame() {
 
       // Listen for votes
       channel.bind('client-vote-cast', (data) => {
-        setVotes((prev) => ({
-          correct: {
-            ...prev.correct,
-            ...(data.voteType === 'correct' && { [data.voterId]: data.answerId })
-          },
-          funniest: {
-            ...prev.funniest,
-            ...(data.voteType === 'funniest' && { [data.voterId]: data.answerId })
-          }
-        }));
-      });
-
-      // Listen for Game Master control events (from current reader)
-      channel.bind('client-gm-lock-answers', (data) => {
-        console.log('Game Master locked answers:', data.gameMasterName);
-        setGamePhase('reveal');
-        if (pusher) {
-          channel.trigger('client-answers-locked', {
-            gamePhase: 'reveal',
-          });
-        }
-      });
-
-      channel.bind('client-gm-reveal-answer', (data) => {
-        console.log('Game Master revealing answer:', data.gameMasterName);
-        setShowAnswer(true);
-        setGamePhase('voting');
-
-        // Use state updaters to access current values
-        setRiddles((currentRiddles) => {
-          setCurrentRiddleIndex((currentIndex) => {
-            setSubmittedAnswers((currentAnswers) => {
-              if (pusher) {
-                channel.trigger('client-reveal-answer', {
-                  answer: currentRiddles[currentIndex]?.answer,
-                  submittedAnswers: currentAnswers,
-                  gamePhase: 'voting',
-                });
-              }
-              return currentAnswers;
-            });
-            return currentIndex;
-          });
-          return currentRiddles;
-        });
-      });
-
-      channel.bind('client-gm-finish-voting', (data) => {
-        console.log('Game Master finishing voting:', data.gameMasterName);
-        setGamePhase('scores');
-
-        // Calculate winners using current state
         setVotes((currentVotes) => {
-          setPlayers((currentPlayers) => {
-            const correctVotes = {};
-            const funniestVotes = {};
+          const updated = { ...currentVotes };
 
-            Object.values(currentVotes.correct).forEach((answerId) => {
-              correctVotes[answerId] = (correctVotes[answerId] || 0) + 1;
-            });
+          if (data.voteType === 'correct') {
+            updated.correct = { ...updated.correct, [data.voterId]: data.answerId };
+          } else if (data.voteType === 'funniest') {
+            updated.funniest = { ...updated.funniest, [data.voterId]: data.answerId };
+          }
 
-            Object.values(currentVotes.funniest).forEach((answerId) => {
-              funniestVotes[answerId] = (funniestVotes[answerId] || 0) + 1;
-            });
-
-            // Find winners
-            const correctWinnerId = Object.keys(correctVotes).reduce((a, b) =>
-              correctVotes[a] > correctVotes[b] ? a : b, null
-            );
-            const funniestWinnerId = Object.keys(funniestVotes).reduce((a, b) =>
-              funniestVotes[a] > funniestVotes[b] ? a : b, null
-            );
-
-            // Award points
-            const updatedPlayers = currentPlayers.map((p) => {
-              let newScore = p.score;
-
-              // Saint wins if they got most "correct" votes
-              if (p.role === 'SAINT' && p.id === correctWinnerId) {
-                newScore += 1;
-              }
-
-              // Sinner wins if they got most "funniest" votes
-              if (p.role === 'SINNER' && p.id === funniestWinnerId) {
-                newScore += 1;
-              }
-
-              // Bonus: Sinner wins both categories (fooled everyone)
-              if (p.role === 'SINNER' && p.id === correctWinnerId && p.id === funniestWinnerId) {
-                newScore += 1; // Extra point
-              }
-
-              return { ...p, score: newScore };
-            });
-
-            if (pusher) {
-              channel.trigger('client-scores-updated', {
-                players: updatedPlayers,
-                correctWinnerId,
-                funniestWinnerId,
-                gamePhase: 'scores',
-              });
-            }
-
-            return updatedPlayers;
-          });
-
-          return currentVotes;
-        });
-      });
-
-      channel.bind('client-gm-next-riddle', (data) => {
-        console.log('Game Master moving to next riddle:', data.gameMasterName);
-
-        setCurrentRiddleIndex((currentIndex) => {
-          const nextIndex = currentIndex + 1;
-
-          setRiddles((currentRiddles) => {
-            if (nextIndex < currentRiddles.length) {
-              setShowAnswer(false);
-              setBuzzedPlayer(null);
-              setGamePhase('answering');
-              setSubmittedAnswers([]);
-              setVotes({ correct: {}, funniest: {} });
-
-              // Rotate to next reader
-              setCurrentReaderIndex((currentReaderIndex) => {
-                setPlayers((currentPlayers) => {
-                  const nextReaderIndex = (currentReaderIndex + 1) % currentPlayers.length;
-
-                  if (pusher && currentPlayers.length > 0) {
-                    channel.trigger('client-next-riddle', {
-                      riddleIndex: nextIndex,
-                      riddle: currentRiddles[nextIndex].clue,
-                      readerId: currentPlayers[nextReaderIndex].id,
-                      readerName: currentPlayers[nextReaderIndex].name,
-                      gamePhase: 'answering',
-                    });
-
-                    // Reset answer count for new riddle
-                    channel.trigger('client-answer-count-update', {
-                      count: 0,
-                      total: currentPlayers.length,
-                    });
-                  }
-
-                  return currentPlayers;
-                });
-
-                return nextReaderIndex;
-              });
-            } else {
-              // Game over
-              if (pusher) {
-                setPlayers((currentPlayers) => {
-                  channel.trigger('client-game-over', {
-                    finalScores: currentPlayers,
-                  });
-                  return currentPlayers;
-                });
-              }
-            }
-
-            return currentRiddles;
-          });
-
-          return nextIndex;
+          return updated;
         });
       });
     };
@@ -293,74 +131,125 @@ export default function HostGame() {
       if (pusher) {
         pusher.disconnect();
       }
+      if (phaseTimerRef.current) {
+        clearTimeout(phaseTimerRef.current);
+      }
     };
   }, []);
 
-  const shuffleArray = (array) => {
-    const shuffled = [...array];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  // Auto-progress through phases
+  const progressToNextPhase = () => {
+    const channel = channelRef.current;
+    if (!channel) {
+      console.log('No channel available, cannot progress');
+      return;
     }
-    return shuffled;
+
+    setGamePhase((currentPhase) => {
+      console.log('progressToNextPhase - current phase:', currentPhase);
+
+      // Clear any existing timer
+      if (phaseTimerRef.current) {
+        clearTimeout(phaseTimerRef.current);
+      }
+
+      switch (currentPhase) {
+        case 'riddle-display':
+          // Move to answering
+          console.log('Moving to answering phase');
+          channel.trigger('client-phase-change', {
+            phase: 'answering',
+            riddle: riddles[currentRiddleIndex].clue,
+          });
+
+          // Auto-progress after 60 seconds (or when all answers in)
+          phaseTimerRef.current = setTimeout(() => {
+            console.log('60s timer expired, checking if all answers submitted');
+            progressToNextPhase();
+          }, 60000);
+
+          return 'answering';
+
+        case 'answering':
+          // Move to reveal correct answer
+          console.log('Moving to reveal-correct phase');
+          channel.trigger('client-phase-change', {
+            phase: 'reveal-correct',
+            correctAnswer: riddles[currentRiddleIndex].answer,
+          });
+          playSound('correct');
+
+          // Auto-progress after 5 seconds
+          phaseTimerRef.current = setTimeout(() => {
+            console.log('5s timer expired, progressing from reveal-correct');
+            progressToNextPhase();
+          }, 5000);
+
+          return 'reveal-correct';
+
+        case 'reveal-correct':
+          // Move to reveal answers
+          console.log('Moving to reveal-answers phase');
+
+          // Shuffle answers for anonymity
+          const shuffledAnswers = [...submittedAnswers].sort(() => Math.random() - 0.5);
+
+          channel.trigger('client-phase-change', {
+            phase: 'reveal-answers',
+            answers: shuffledAnswers.map(a => ({ id: a.playerId, answer: a.answer })),
+          });
+
+          // Auto-progress after 3s per answer + 2s buffer
+          const revealDuration = shuffledAnswers.length * 3000 + 2000;
+          console.log(`Reveal duration: ${revealDuration}ms for ${shuffledAnswers.length} answers`);
+          phaseTimerRef.current = setTimeout(() => {
+            console.log('Reveal timer expired, progressing to voting');
+            progressToNextPhase();
+          }, revealDuration);
+
+          return 'reveal-answers';
+
+        case 'reveal-answers':
+          // Move to voting
+          console.log('Moving to voting phase');
+          channel.trigger('client-phase-change', {
+            phase: 'voting',
+          });
+
+          // Auto-progress after 30 seconds
+          phaseTimerRef.current = setTimeout(() => {
+            console.log('30s voting timer expired, calculating results');
+            // Don't call progressToNextPhase, call calculateResults directly
+            setGamePhase('results');
+            calculateResults();
+          }, 30000);
+
+          return 'voting';
+
+        case 'voting':
+          // This case is triggered by calculateResults()
+          console.log('Moving to results phase');
+          return 'results';
+
+        case 'results':
+          // This case is triggered by moveToNextRiddle()
+          console.log('Results phase - waiting for next riddle');
+          return 'results';
+
+        default:
+          console.log('Unknown phase:', currentPhase);
+          return currentPhase;
+      }
+    });
   };
 
-  const handleStartGame = () => {
-    const shuffledRiddles = shuffleArray(riddlesData);
-    setRiddles(shuffledRiddles);
-    setGameStarted(true);
-    setCurrentRiddleIndex(0);
-    setCurrentReaderIndex(0);
-    setShowAnswer(false);
-    setGamePhase('answering');
-    setSubmittedAnswers([]);
+  const calculateResults = () => {
+    const channel = channelRef.current;
+    if (!channel) return;
 
-    // Notify all players game started with first riddle
-    if (pusher && players.length > 0) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-game-started', {
-        riddleCount: riddlesData.length,
-        firstRiddle: shuffledRiddles[0].clue,
-        readerId: players[0].id,
-        readerName: players[0].name,
-        gamePhase: 'answering',
-      });
+    console.log('Calculating results with votes:', votes);
 
-      // Send initial answer count
-      channel.trigger('client-answer-count-update', {
-        count: 0,
-        total: players.length,
-      });
-    }
-  };
-
-  const handleLockAnswers = () => {
-    setGamePhase('reveal');
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-answers-locked', {
-        gamePhase: 'reveal',
-      });
-    }
-  };
-
-  const handleRevealAnswer = () => {
-    setShowAnswer(true);
-    setGamePhase('voting');
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-reveal-answer', {
-        answer: riddles[currentRiddleIndex].answer,
-        submittedAnswers: submittedAnswers,
-        gamePhase: 'voting',
-      });
-    }
-  };
-
-  const handleFinishVoting = () => {
-    setGamePhase('scores');
-
-    // Calculate winners
+    // Count votes
     const correctVotes = {};
     const funniestVotes = {};
 
@@ -372,378 +261,482 @@ export default function HostGame() {
       funniestVotes[answerId] = (funniestVotes[answerId] || 0) + 1;
     });
 
+    console.log('Vote counts:', { correctVotes, funniestVotes });
+
     // Find winners
-    const correctWinnerId = Object.keys(correctVotes).reduce((a, b) =>
-      correctVotes[a] > correctVotes[b] ? a : b, null
-    );
-    const funniestWinnerId = Object.keys(funniestVotes).reduce((a, b) =>
-      funniestVotes[a] > funniestVotes[b] ? a : b, null
-    );
+    let correctWinnerId = null;
+    let funniestWinnerId = null;
+
+    if (Object.keys(correctVotes).length > 0) {
+      correctWinnerId = Object.keys(correctVotes).reduce((a, b) =>
+        correctVotes[a] > correctVotes[b] ? a : b
+      );
+    }
+
+    if (Object.keys(funniestVotes).length > 0) {
+      funniestWinnerId = Object.keys(funniestVotes).reduce((a, b) =>
+        funniestVotes[a] > funniestVotes[b] ? a : b
+      );
+    }
+
+    console.log('Winners:', { correctWinnerId, funniestWinnerId });
 
     // Award points
     const updatedPlayers = players.map((p) => {
       let newScore = p.score;
+      let wonCorrect = false;
+      let wonFunniest = false;
 
-      // Saint wins if they got most "correct" votes
       if (p.role === 'SAINT' && p.id === correctWinnerId) {
         newScore += 1;
+        wonCorrect = true;
+        console.log(`${p.name} (SAINT) wins Most Correct (+1)`);
       }
 
-      // Sinner wins if they got most "funniest" votes
       if (p.role === 'SINNER' && p.id === funniestWinnerId) {
         newScore += 1;
+        wonFunniest = true;
+        console.log(`${p.name} (SINNER) wins Funniest (+1)`);
       }
 
-      // Bonus: Sinner wins both categories (fooled everyone)
+      // Bonus for winning both
       if (p.role === 'SINNER' && p.id === correctWinnerId && p.id === funniestWinnerId) {
-        newScore += 1; // Extra point
+        newScore += 1;
+        console.log(`${p.name} (SINNER) BONUS for winning both (+1)`);
       }
 
-      return { ...p, score: newScore };
+      return { ...p, score: newScore, wonCorrect, wonFunniest };
     });
 
-    setPlayers(updatedPlayers);
+    console.log('Updated players:', updatedPlayers);
 
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      channel.trigger('client-scores-updated', {
-        players: updatedPlayers,
-        correctWinnerId,
-        funniestWinnerId,
-        gamePhase: 'scores',
+    setPlayers(updatedPlayers);
+    setGamePhase('results');
+
+    // Find winners for celebration
+    const correctWinner = updatedPlayers.find(p => p.id === correctWinnerId);
+    const funniestWinner = updatedPlayers.find(p => p.id === funniestWinnerId);
+
+    // Broadcast results
+    channel.trigger('client-results', {
+      phase: 'results',
+      players: updatedPlayers,
+      correctWinner: correctWinner ? { id: correctWinner.id, name: correctWinner.name } : null,
+      funniestWinner: funniestWinner ? { id: funniestWinner.id, name: funniestWinner.name } : null,
+    });
+
+    // Show celebration
+    if (correctWinner || funniestWinner) {
+      playSound('roundComplete');
+      setShowCelebration(true);
+      setCelebrationData({
+        correctWinner: correctWinner?.name,
+        funniestWinner: funniestWinner?.name,
       });
+
+      setTimeout(() => setShowCelebration(false), 4000);
     }
+
+    // Auto-progress after 10 seconds
+    phaseTimerRef.current = setTimeout(() => {
+      progressToNextPhase();
+    }, 10000);
   };
 
-  const handleNextRiddle = () => {
+  const moveToNextRiddle = () => {
+    const channel = channelRef.current;
+    if (!channel) return;
+
     const nextIndex = currentRiddleIndex + 1;
+
     if (nextIndex < riddles.length) {
       setCurrentRiddleIndex(nextIndex);
-      setShowAnswer(false);
-      setBuzzedPlayer(null);
-      setGamePhase('answering');
+      setGamePhase('riddle-display');
       setSubmittedAnswers([]);
       setVotes({ correct: {}, funniest: {} });
 
-      // Rotate to next reader
-      const nextReaderIndex = (currentReaderIndex + 1) % players.length;
-      setCurrentReaderIndex(nextReaderIndex);
+      channel.trigger('client-phase-change', {
+        phase: 'riddle-display',
+        riddleIndex: nextIndex,
+        riddle: riddles[nextIndex].clue,
+      });
 
-      if (pusher && players.length > 0) {
-        const channel = pusher.channel(`presence-game-${gameCode}`);
-        channel.trigger('client-next-riddle', {
-          riddleIndex: nextIndex,
-          riddle: riddles[nextIndex].clue,
-          readerId: players[nextReaderIndex].id,
-          readerName: players[nextReaderIndex].name,
-          gamePhase: 'answering',
-        });
-
-        // Reset answer count for new riddle
-        channel.trigger('client-answer-count-update', {
-          count: 0,
-          total: players.length,
-        });
-      }
+      // Auto-progress after 5 seconds
+      phaseTimerRef.current = setTimeout(() => {
+        progressToNextPhase();
+      }, 5000);
     } else {
       // Game over
-      if (pusher) {
-        const channel = pusher.channel(`presence-game-${gameCode}`);
-        channel.trigger('client-game-over', {
-          finalScores: players,
-        });
-      }
-    }
-  };
-
-  const handleAwardPoint = (playerId) => {
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, score: p.score + 1 } : p))
-    );
-    setBuzzedPlayer(null);
-
-    if (pusher) {
-      const channel = pusher.channel(`presence-game-${gameCode}`);
-      const winner = players.find((p) => p.id === playerId);
-      channel.trigger('client-point-awarded', {
-        playerId,
-        playerName: winner?.name,
-        newScore: (winner?.score || 0) + 1,
+      setGamePhase('game-over');
+      channel.trigger('client-game-over', {
+        finalScores: players,
       });
     }
   };
 
-  const joinUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/join?code=${gameCode}`
-    : '';
+  const handleStartGame = () => {
+    if (players.length === 0) {
+      alert('Need at least 1 player to start!');
+      return;
+    }
+
+    // Select 10 random riddles
+    const shuffled = [...riddlesData].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, 10);
+    setRiddles(selected);
+    setGameStarted(true);
+    setGamePhase('riddle-display');
+    playSound('start');
+
+    const channel = channelRef.current;
+    if (channel) {
+      channel.trigger('client-game-started', {
+        riddleIndex: 0,
+        riddle: selected[0].clue,
+        gamePhase: 'riddle-display',
+      });
+    }
+
+    // Auto-progress after 5 seconds
+    phaseTimerRef.current = setTimeout(() => {
+      progressToNextPhase();
+    }, 5000);
+  };
+
+  const handleSkipPhase = () => {
+    if (phaseTimerRef.current) {
+      clearTimeout(phaseTimerRef.current);
+    }
+    progressToNextPhase();
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(gameCode);
+    playSound('click');
+    alert('Game code copied!');
+  };
+
+  const handleShare = async () => {
+    const joinUrl = `${window.location.origin}/join?code=${gameCode}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Join Dirty Minds!',
+          text: `Join my Dirty Minds game with code: ${gameCode}`,
+          url: joinUrl,
+        });
+        playSound('click');
+      } catch (err) {
+        console.log('Share cancelled');
+      }
+    }
+  };
 
   const currentRiddle = riddles[currentRiddleIndex];
-  const isLastRiddle = currentRiddleIndex === riddles.length - 1;
-  const buzzedPlayerData = players.find((p) => p.id === buzzedPlayer);
 
   return (
     <>
       <Head>
         <title>Host Game - Dirty Minds</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </Head>
 
-      <Container maxWidth="sm">
-        <Box sx={{ py: 4, minHeight: '100vh' }}>
-          {!gameStarted ? (
-            <Card>
-              <CardContent>
-                <Typography variant="h5" gutterBottom sx={{ fontWeight: 700, textAlign: 'center' }}>
-                  Host Game
-                </Typography>
+      <Container maxWidth="lg">
+        <Box sx={{ py: 3, minHeight: '100vh' }}>
+          {/* Lobby Phase */}
+          {!gameStarted && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card>
+                <CardContent>
+                  <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
+                    Game Code: {gameCode}
+                  </Typography>
 
-                <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
-                  <Box sx={{ p: 2, bgcolor: 'white', borderRadius: 2 }}>
-                    <QRCodeSVG value={joinUrl} size={200} />
+                  <Box sx={{ my: 3, textAlign: 'center' }}>
+                    <QRCodeSVG
+                      value={`${typeof window !== 'undefined' ? window.location.origin : ''}/join?code=${gameCode}`}
+                      size={200}
+                      level="H"
+                    />
                   </Box>
-                </Box>
 
-                <Typography variant="h6" sx={{ textAlign: 'center', fontWeight: 700, mb: 1 }}>
-                  Game Code: {gameCode}
-                </Typography>
-                <Typography variant="body2" sx={{ textAlign: 'center', color: 'text.secondary', mb: 2 }}>
-                  Share this link with players:
-                </Typography>
-
-                <Stack spacing={1} sx={{ mb: 3 }}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    color="primary"
-                    startIcon={<ContentCopyIcon />}
-                    onClick={() => {
-                      navigator.clipboard.writeText(joinUrl);
-                      alert('Link copied! Share it with your players.');
-                    }}
-                  >
-                    Copy Join Link
-                  </Button>
-
-                  {canShare && (
+                  <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
                     <Button
                       fullWidth
                       variant="outlined"
-                      color="primary"
-                      startIcon={<ShareIcon />}
-                      onClick={() => {
-                        navigator.share({
-                          title: 'Join Dirty Minds Game',
-                          text: `Join my game with code: ${gameCode}`,
-                          url: joinUrl,
-                        });
-                      }}
+                      startIcon={<ContentCopyIcon />}
+                      onClick={handleCopyCode}
                     >
-                      Share via Text/Email
+                      Copy Code
                     </Button>
-                  )}
-                </Stack>
+                    {canShare && (
+                      <Button
+                        fullWidth
+                        variant="outlined"
+                        startIcon={<ShareIcon />}
+                        onClick={handleShare}
+                      >
+                        Share
+                      </Button>
+                    )}
+                  </Stack>
 
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
+                  <Typography variant="h6" gutterBottom>
                     Players ({players.length})
                   </Typography>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {players.length === 0 && (
-                      <Typography variant="body2" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
-                        Waiting for players...
-                      </Typography>
-                    )}
+
+                  <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, mb: 3 }}>
                     {players.map((player) => (
                       <Chip
                         key={player.id}
-                        label={player.name}
-                        color="primary"
-                        variant="outlined"
-                        sx={{ mb: 1 }}
+                        label={`${player.role === 'SAINT' ? '😇' : '😈'} ${player.name}`}
+                        color={player.role === 'SAINT' ? 'primary' : 'secondary'}
                       />
                     ))}
                   </Stack>
-                </Box>
 
-                <Button
-                  fullWidth
-                  variant="contained"
-                  color="secondary"
-                  size="large"
-                  onClick={handleStartGame}
-                  disabled={players.length < 1}
-                  startIcon={<PlayArrowIcon />}
-                >
-                  Start Game
-                </Button>
-
-                {players.length < 1 && (
-                  <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 2, color: 'text.secondary' }}>
-                    Waiting for at least 1 player to join
-                  </Typography>
-                )}
-              </CardContent>
-            </Card>
-          ) : (
-            <Box>
-              <Scoreboard players={players} />
-
-              <Card sx={{ mb: 3 }}>
-                <CardContent>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                      Riddle {currentRiddleIndex + 1} of {riddles.length}
-                    </Typography>
-                    <Chip
-                      label={gamePhase === 'answering' ? 'Answering' : gamePhase === 'reveal' ? 'Locked' : gamePhase === 'voting' ? 'Voting' : 'Scores'}
-                      color={gamePhase === 'voting' ? 'secondary' : gamePhase === 'scores' ? 'primary' : 'default'}
-                      size="small"
-                    />
-                  </Stack>
-
-                  <Box
-                    sx={{
-                      p: 3,
-                      bgcolor: 'rgba(255, 255, 255, 0.05)',
-                      borderRadius: 2,
-                      mb: 3,
-                      minHeight: 120,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    startIcon={<PlayArrowIcon />}
+                    onClick={handleStartGame}
+                    disabled={players.length === 0}
+                    sx={{ py: 2 }}
                   >
-                    <Typography variant="h6" sx={{ textAlign: 'center', lineHeight: 1.6 }}>
-                      {currentRiddle.clue}
-                    </Typography>
+                    Start Game
+                  </Button>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+
+          {/* Game Started */}
+          {gameStarted && currentRiddle && (
+            <Box>
+              {/* Scoreboard */}
+              <Box sx={{ mb: 3 }}>
+                <Scoreboard players={players} />
+              </Box>
+
+              {/* Main Game Card */}
+              <Card>
+                <CardContent>
+                  {/* Phase Indicator */}
+                  <Box sx={{ mb: 3, textAlign: 'center' }}>
+                    <Chip
+                      label={gamePhase.toUpperCase().replace('-', ' ')}
+                      color="primary"
+                      sx={{ fontWeight: 700, fontSize: '1rem', px: 2 }}
+                    />
                   </Box>
 
-                  {/* Show submitted answers count */}
-                  {gamePhase === 'answering' && (
-                    <Box
-                      sx={{
-                        p: 2,
-                        mb: 2,
-                        bgcolor: 'rgba(255, 255, 255, 0.05)',
-                        borderRadius: 2,
-                      }}
+                  {/* Riddle Display */}
+                  {(gamePhase === 'riddle-display' || gamePhase === 'answering') && (
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
                     >
-                      <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                        Answers: {submittedAnswers.length} / {players.length}
-                      </Typography>
-                      <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
-                        {submittedAnswers.map((ans) => (
-                          <Chip
-                            key={ans.playerId}
-                            label={ans.playerName}
-                            size="small"
-                            color={ans.role === 'SAINT' ? 'primary' : 'secondary'}
+                      <Box sx={{ mb: 3, p: 4, bgcolor: 'rgba(255, 255, 255, 0.05)', borderRadius: 2, textAlign: 'center' }}>
+                        <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+                          Round {currentRiddleIndex + 1} of {riddles.length}
+                        </Typography>
+                        <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                          {currentRiddle.clue}
+                        </Typography>
+                      </Box>
+
+                      {gamePhase === 'riddle-display' && (
+                        <Box>
+                          <Typography variant="h6" gutterBottom sx={{ textAlign: 'center' }}>
+                            Get ready! Players are preparing...
+                          </Typography>
+                          <Button
+                            fullWidth
+                            variant="contained"
+                            startIcon={<SkipNextIcon />}
+                            onClick={handleSkipPhase}
+                            sx={{ mt: 2 }}
+                          >
+                            Start Answering Now
+                          </Button>
+                        </Box>
+                      )}
+
+                      {gamePhase === 'answering' && (
+                        <Box>
+                          <Typography variant="h6" gutterBottom>
+                            Answers: {submittedAnswers.length} / {players.length}
+                          </Typography>
+                          <LinearProgress
+                            variant="determinate"
+                            value={(submittedAnswers.length / players.length) * 100}
+                            sx={{ mb: 2, height: 10, borderRadius: 5 }}
                           />
-                        ))}
-                      </Stack>
-                    </Box>
+                          <Button
+                            fullWidth
+                            variant="contained"
+                            startIcon={<SkipNextIcon />}
+                            onClick={handleSkipPhase}
+                            disabled={submittedAnswers.length === 0}
+                          >
+                            Skip to Reveal ({submittedAnswers.length} answers)
+                          </Button>
+                        </Box>
+                      )}
+                    </motion.div>
                   )}
 
-                  {/* Submitted answers (anonymous) */}
-                  {(gamePhase === 'reveal' || gamePhase === 'voting' || gamePhase === 'scores') && (
-                    <Box sx={{ mb: 3 }}>
-                      <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
+                  {/* Reveal Correct Answer */}
+                  {gamePhase === 'reveal-correct' && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                    >
+                      <Box sx={{ p: 4, bgcolor: 'rgba(0, 237, 100, 0.1)', borderRadius: 2, textAlign: 'center' }}>
+                        <Typography variant="h5" gutterBottom>
+                          Correct Answer:
+                        </Typography>
+                        <Typography variant="h3" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                          {currentRiddle.answer}
+                        </Typography>
+                      </Box>
+                    </motion.div>
+                  )}
+
+                  {/* Reveal Answers */}
+                  {(gamePhase === 'reveal-answers' || gamePhase === 'voting') && (
+                    <Box>
+                      <Typography variant="h6" gutterBottom>
                         Player Answers:
                       </Typography>
-                      {submittedAnswers.map((ans, idx) => (
-                        <Box
-                          key={idx}
-                          sx={{
-                            p: 2,
-                            mb: 1,
-                            bgcolor: ans.role === 'SAINT' ? 'rgba(0, 237, 100, 0.1)' : 'rgba(255, 92, 147, 0.1)',
-                            borderRadius: 2,
-                          }}
-                        >
-                          <Typography variant="body1">
-                            {ans.role === 'SAINT' ? '😇' : '😈'} {ans.playerName}: "{ans.answer}"
+                      <Stack spacing={2}>
+                        {submittedAnswers.map((answer, index) => (
+                          <motion.div
+                            key={answer.playerId}
+                            initial={{ x: -20, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            transition={{ delay: index * 0.1 }}
+                          >
+                            <Box
+                              sx={{
+                                p: 2,
+                                bgcolor: 'rgba(255, 255, 255, 0.05)',
+                                borderRadius: 2,
+                                border: '1px solid rgba(255, 255, 255, 0.1)',
+                              }}
+                            >
+                              <Typography variant="body1">{answer.answer}</Typography>
+                            </Box>
+                          </motion.div>
+                        ))}
+                      </Stack>
+
+                      {gamePhase === 'voting' && (
+                        <Box sx={{ mt: 3 }}>
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            Players are voting...
                           </Typography>
+                          <Button
+                            fullWidth
+                            variant="contained"
+                            startIcon={<SkipNextIcon />}
+                            onClick={handleSkipPhase}
+                          >
+                            Skip to Results
+                          </Button>
                         </Box>
-                      ))}
+                      )}
                     </Box>
                   )}
 
-                  {showAnswer && (
-                    <Box
-                      sx={{
-                        p: 3,
-                        bgcolor: 'rgba(0, 237, 100, 0.1)',
-                        border: '2px solid',
-                        borderColor: 'primary.main',
-                        borderRadius: 2,
-                        mb: 3,
-                      }}
+                  {/* Results */}
+                  {gamePhase === 'results' && celebrationData && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
                     >
-                      <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, textTransform: 'uppercase' }}>
-                        Correct Answer
-                      </Typography>
-                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 1 }}>
-                        {currentRiddle.answer}
-                      </Typography>
-                    </Box>
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
+                          Round Results
+                        </Typography>
+
+                        {celebrationData.correctWinner && (
+                          <Box sx={{ mb: 2, p: 3, bgcolor: 'rgba(0, 237, 100, 0.1)', borderRadius: 2 }}>
+                            <Typography variant="h6">
+                              😇 Most Correct: {celebrationData.correctWinner} (+1)
+                            </Typography>
+                          </Box>
+                        )}
+
+                        {celebrationData.funniestWinner && (
+                          <Box sx={{ mb: 2, p: 3, bgcolor: 'rgba(255, 92, 147, 0.1)', borderRadius: 2 }}>
+                            <Typography variant="h6">
+                              😈 Funniest: {celebrationData.funniestWinner} (+1)
+                            </Typography>
+                          </Box>
+                        )}
+
+                        <Button
+                          fullWidth
+                          variant="contained"
+                          size="large"
+                          startIcon={<SkipNextIcon />}
+                          onClick={handleSkipPhase}
+                          sx={{ mt: 2 }}
+                        >
+                          Next Round
+                        </Button>
+                      </Box>
+                    </motion.div>
                   )}
 
-                  <Stack spacing={2}>
-                    {gamePhase === 'answering' && (
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="primary"
-                        size="large"
-                        onClick={handleLockAnswers}
-                        disabled={submittedAnswers.length === 0}
-                      >
-                        Lock Answers ({submittedAnswers.length} received)
-                      </Button>
-                    )}
-
-                    {gamePhase === 'reveal' && (
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="primary"
-                        size="large"
-                        onClick={handleRevealAnswer}
-                        startIcon={<VisibilityIcon />}
-                      >
-                        Reveal Answer & Start Voting
-                      </Button>
-                    )}
-
-                    {gamePhase === 'voting' && (
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="secondary"
-                        size="large"
-                        onClick={handleFinishVoting}
-                      >
-                        Finish Voting & Calculate Scores
-                      </Button>
-                    )}
-
-                    {gamePhase === 'scores' && (
-                      <Button
-                        fullWidth
-                        variant="contained"
-                        color="secondary"
-                        size="large"
-                        onClick={handleNextRiddle}
-                        endIcon={<NavigateNextIcon />}
-                      >
-                        {isLastRiddle ? 'View Final Scores' : 'Next Riddle'}
-                      </Button>
-                    )}
-                  </Stack>
+                  {/* Game Over */}
+                  {gamePhase === 'game-over' && (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                    >
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h3" gutterBottom sx={{ fontWeight: 700 }}>
+                          Game Over!
+                        </Typography>
+                        <Typography variant="h5" gutterBottom>
+                          Final Scores
+                        </Typography>
+                        <Scoreboard players={players} />
+                        <Button
+                          fullWidth
+                          variant="contained"
+                          size="large"
+                          onClick={() => router.push('/')}
+                          sx={{ mt: 3 }}
+                        >
+                          New Game
+                        </Button>
+                      </Box>
+                    </motion.div>
+                  )}
                 </CardContent>
               </Card>
             </Box>
           )}
+
+          {/* Celebration Overlay */}
+          <AnimatePresence>
+            {showCelebration && celebrationData && (
+              <Celebration
+                trigger={true}
+                message="Round Complete!"
+                type="winner"
+                duration={4000}
+              />
+            )}
+          </AnimatePresence>
         </Box>
       </Container>
     </>
