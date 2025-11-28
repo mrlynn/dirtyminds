@@ -55,15 +55,29 @@ test.describe('Dirty Minds Game Flow', () => {
     hostPage = await hostContext.newPage();
 
     await hostPage.goto(`${BASE_URL}/host`);
-    await hostPage.waitForTimeout(2000);
 
-    // Get the game code - extract only the 6-character code, not the label
-    const codeText = await hostPage.textContent('text=/Game Code:/i');
-    // Extract just the 6-character code using regex
-    const codeMatch = codeText.match(/[A-Z0-9]{6}/);
-    gameCode = codeMatch ? codeMatch[0] : null;
+    // Wait for page to fully load and game code to appear
+    await hostPage.waitForLoadState('networkidle');
+    await hostPage.waitForTimeout(3000);
+
+    // Try multiple methods to get the game code
+    try {
+      // Method 1: Look for text containing "Game Code:"
+      const codeElement = await hostPage.locator('text=/Game Code:/i').first();
+      await codeElement.waitFor({ timeout: 10000 });
+      const codeText = await codeElement.textContent();
+      const codeMatch = codeText.match(/[A-Z0-9]{6}/);
+      gameCode = codeMatch ? codeMatch[0] : null;
+    } catch (e) {
+      console.log('Method 1 failed, trying method 2...');
+      // Method 2: Look for any 6-character code on the page
+      const pageText = await hostPage.textContent('body');
+      const codeMatch = pageText.match(/[A-Z0-9]{6}/);
+      gameCode = codeMatch ? codeMatch[0] : null;
+    }
 
     if (!gameCode) {
+      await hostPage.screenshot({ path: 'test-results/code-extraction-error.png' });
       throw new Error('Could not extract game code from page');
     }
 
@@ -136,22 +150,28 @@ test.describe('Dirty Minds Game Flow', () => {
       const playerName = `Player${i + 1}`;
 
       try {
-        // Wait for answer input to appear
-        const answerInput = playerPage.locator('input[type="text"], textarea').first();
-        await answerInput.waitFor({ timeout: 5000 });
+        // Wait a bit longer for React to render the answering phase
+        await playerPage.waitForTimeout(2000);
+
+        // Try multiple selectors for Material-UI TextField
+        const answerInput = playerPage.locator('textarea, input[type="text"], .MuiInputBase-input').first();
+        await answerInput.waitFor({ timeout: 10000 });
 
         // Generate a funny/correct answer based on role
         const answer = `Answer from ${playerName}`;
         await answerInput.fill(answer);
 
-        // Submit answer
-        const submitButton = playerPage.locator('button:has-text("Submit")');
+        // Submit answer - try different button text variations
+        const submitButton = playerPage.locator('button:has-text("Submit Answer"), button:has-text("Submit")').first();
+        await submitButton.waitFor({ timeout: 5000 });
         await submitButton.click();
 
         console.log(`   ✓ ${playerName} submitted answer: "${answer}"`);
         await playerPage.waitForTimeout(500);
       } catch (error) {
         console.log(`   ⚠️  ${playerName} couldn't submit answer:`, error.message);
+        // Take a screenshot to debug
+        await playerPage.screenshot({ path: `test-results/${playerName}-answer-error.png` });
       }
     }
 
@@ -175,15 +195,22 @@ test.describe('Dirty Minds Game Flow', () => {
       const playerName = `Player${i + 1}`;
 
       try {
-        // Wait for voting buttons to appear
-        await playerPage.waitForTimeout(2000);
+        // Wait longer for voting phase to fully render
+        await playerPage.waitForTimeout(3000);
 
         // Find vote buttons (Most Correct and Funniest)
-        const correctButtons = playerPage.locator('button:has-text("Most Correct")');
-        const funniestButtons = playerPage.locator('button:has-text("Funniest")');
+        // Try various text patterns in case wording is different
+        const correctButtons = playerPage.locator('button:has-text("Most Correct"), button:has-text("Correct")');
+        const funniestButtons = playerPage.locator('button:has-text("Funniest"), button:has-text("Funny")');
+
+        // Wait for buttons to appear
+        await correctButtons.first().waitFor({ timeout: 10000 }).catch(() => {});
+        await funniestButtons.first().waitFor({ timeout: 10000 }).catch(() => {});
 
         const correctCount = await correctButtons.count();
         const funniestCount = await funniestButtons.count();
+
+        console.log(`   ℹ️  ${playerName} sees ${correctCount} correct buttons, ${funniestCount} funniest buttons`);
 
         if (correctCount > 0 && funniestCount > 0) {
           // Vote for random answers (not your own)
@@ -198,9 +225,12 @@ test.describe('Dirty Minds Game Flow', () => {
           console.log(`   ✓ ${playerName} voted`);
         } else {
           console.log(`   ⚠️  ${playerName} couldn't find vote buttons`);
+          // Take screenshot to debug
+          await playerPage.screenshot({ path: `test-results/${playerName}-voting-error.png` });
         }
       } catch (error) {
         console.log(`   ⚠️  ${playerName} voting error:`, error.message);
+        await playerPage.screenshot({ path: `test-results/${playerName}-voting-error.png` });
       }
     }
 

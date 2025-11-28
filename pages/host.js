@@ -42,6 +42,8 @@ export default function HostGame() {
   const riddlesRef = useRef([]);
   const currentRiddleIndexRef = useRef(0);
   const submittedAnswersRef = useRef([]);
+  const votesRef = useRef({ correct: {}, funniest: {} });
+  const playersRef = useRef([]);
 
   useEffect(() => {
     setCanShare(typeof navigator !== 'undefined' && !!navigator.share);
@@ -59,6 +61,14 @@ export default function HostGame() {
   useEffect(() => {
     submittedAnswersRef.current = submittedAnswers;
   }, [submittedAnswers]);
+
+  useEffect(() => {
+    votesRef.current = votes;
+  }, [votes]);
+
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
 
   useEffect(() => {
     const createGame = async () => {
@@ -276,17 +286,21 @@ export default function HostGame() {
     const channel = channelRef.current;
     if (!channel) return;
 
-    console.log('Calculating results with votes:', votes);
+    // Use refs to get current values
+    const currentVotes = votesRef.current;
+    const currentPlayers = playersRef.current;
+
+    console.log('Calculating results with votes:', currentVotes);
 
     // Count votes
     const correctVotes = {};
     const funniestVotes = {};
 
-    Object.values(votes.correct).forEach((answerId) => {
+    Object.values(currentVotes.correct).forEach((answerId) => {
       correctVotes[answerId] = (correctVotes[answerId] || 0) + 1;
     });
 
-    Object.values(votes.funniest).forEach((answerId) => {
+    Object.values(currentVotes.funniest).forEach((answerId) => {
       funniestVotes[answerId] = (funniestVotes[answerId] || 0) + 1;
     });
 
@@ -311,7 +325,7 @@ export default function HostGame() {
     console.log('Winners:', { correctWinnerId, funniestWinnerId });
 
     // Award points
-    const updatedPlayers = players.map((p) => {
+    const updatedPlayers = currentPlayers.map((p) => {
       let newScore = p.score;
       let wonCorrect = false;
       let wonFunniest = false;
